@@ -1,5 +1,13 @@
 # 검증 기록
 
+## 2026-10-01 시뮬 시간 설정 수정
+
+- 일반 gym bridge에 맞춰 시뮬 기본 `use_sim_time=false`로 수정했습니다.
+- launch 검사 7개 통과: 모든 노드의 기본 시간 설정과 명시적 `use_sim_time=true` 재정의를 확인했습니다.
+- Windows 독립 C++ 코어 빌드 및 CTest 통과. 24단계 코너 검증 최대 solve 시간은 약 88 ms였습니다.
+- planner 정지 상태에 시간 오류, 입력 지연, ICP 품질 수치를 구분했습니다. 품질·입력 만료 차단 조건은 유지합니다.
+- 이 환경에는 ROS 2가 없어 변경한 ROS 노드의 빌드·gym 실행은 검증하지 못했습니다. 코어 검사는 ROS 노드 검증을 대신하지 않습니다.
+
 ## 2026-10-01 환경별 launch 추가 검증
 
 `navigation_real.launch.py`, `navigation_sim.launch.py`와 각 YAML 프로필을 추가했습니다.

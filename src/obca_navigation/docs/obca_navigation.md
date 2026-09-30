@@ -149,8 +149,8 @@ ros2 launch obca_navigation navigation_sim.launch.py
 
 시뮬 프레임 이름은 실제 bridge 설정과 일치시켜야 합니다. gym이 이미 map 기반 TF를
 발행하는 경우 중복 부모를 만들지 않도록 시뮬 프로필은 ICP의 map→odom 발행을 끕니다.
-시뮬 기본값은 `use_sim_time=true`이므로 `/clock`이 필요합니다. `/clock`이 없는 gym은
-`use_sim_time:=false`로 실행합니다. 실차는 map→odom TF를 발행하며 기존 mux의
+시뮬 기본값은 일반 gym bridge에 맞춘 `use_sim_time=false`입니다. `/clock`을 발행하고
+센서·TF도 같은 시뮬 시각을 사용하는 bridge에서만 `use_sim_time:=true`로 실행합니다. 실차는 map→odom TF를 발행하며 기존 mux의
 `/drive_autonomous`를 사용합니다. 다른 mux 구성에서는 `drive_topic`을 변경하십시오.
 센서 드라이버·mux·gym은 이 저장소의 launch에 포함하지 않습니다.
 
@@ -158,7 +158,10 @@ ros2 launch obca_navigation navigation_sim.launch.py
 
 - `waiting for initial pose and ICP`: 초기 위치 또는 그 이후의 위치 샘플 대기.
 - `waiting for fresh synchronized scan/TF`: 스캔 시각을 둘러싼 위치 또는 센서 TF 부족.
-- `stale or degraded localization`: 오래된 입력, 낮은 정합률, 큰 잔차, 미수렴 등.
+- `ROS clock not started` / `localization stamp is in the future`: `/clock` 및 `use_sim_time` 불일치.
+- `waiting for ICP diagnostics`: 초기화 이후 정합 진단이 아직 수신되지 않음.
+- `stale ICP diagnostics` / `stale ICP pose`: 수신 경과시간과 stamp 나이를 초 단위로 확인.
+- `ICP quality`: 수렴 여부, 정합률과 최소값, 잔차와 최대값, dead reckoning 및 거부 여부를 확인.
 - `obstacle budget exceeded`: 장애물 사각형 수가 설정 한도를 초과함.
 - `Ipopt status=...`: 비수렴·불가능한 문제·계산시간 초과.
 - `swept footprint reaches ...`: 장애물 또는 미관측 영역에 차체가 닿음.
@@ -167,3 +170,11 @@ ros2 launch obca_navigation navigation_sim.launch.py
 막다른 길 후진 복구, 레이싱 속도 최적화가 없습니다. ICP 누적 지도의 장시간 메모리와
 드리프트도 별도 검증 대상입니다. 관측 지도에 동적 물체가 들어오면 일시적인 장애물로
 취급하며 움직임을 예측하지 않습니다. 첫 검증 대상은 정적 트랙의 저속 주행입니다.
+
+### 시뮬 초기화 후 정지 원인 확인
+
+1. 기존 navigation 프로세스를 종료하고 `ros2 launch obca_navigation navigation_sim.launch.py use_sim_time:=false`로 실행합니다.
+2. RViz의 Fixed Frame을 `map`으로 맞추고 **2D Pose Estimate**로 위치와 방향을 지정합니다.
+3. 계속 정지하면 `ros2 topic echo /obca/status`로 구체적인 정지 이유를 확인합니다.
+4. `ICP quality`이면 `ros2 topic echo /kinematic_localization/diagnostics --once`를 확인합니다. 첫 스캔은 지도 초기화 때문에 미수렴일 수 있으나 이후에도 계속되면 정합 원인을 조사해야 합니다.
+5. 원인 확인 전에 품질 검사나 입력 timeout을 해제하지 않습니다.

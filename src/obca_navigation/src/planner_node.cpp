@@ -36,7 +36,7 @@ class Planner : public rclcpp::Node {
     initial_sub_=create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(declare_parameter<std::string>("initial_pose_topic","/initialpose"),10,
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr m){
         Pose p;if(m->header.frame_id!=frame_ || !poseFrom(m->pose.pose,p)){armed_=false;stop("invalid initial pose");return;}
-        reset_=now().seconds();initial_=p;awaiting_pose_=true;armed_=true;healthy_=false;history_.clear();scans_.clear();previous_.clear();map_.clear();map_stamp_=0;stop("initial pose: waiting for new ICP scans");});
+        reset_=now().seconds();initial_=p;awaiting_pose_=true;armed_=true;healthy_=false;quality_reason_="waiting for ICP diagnostics after initial pose";diag_received_={};history_.clear();scans_.clear();previous_.clear();map_.clear();map_stamp_=0;stop("initial pose: waiting for new ICP scans");});
     odom_sub_=create_subscription<nav_msgs::msg::Odometry>(declare_parameter<std::string>("pose_topic","/pf/pose/odom"),rclcpp::QoS(50),
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m){
         Pose p;const double t=rclcpp::Time(m->header.stamp).seconds();
@@ -49,7 +49,8 @@ class Planner : public rclcpp::Node {
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr m){if(armed_){scans_.push_back(m);while(scans_.size()>static_cast<std::size_t>(max_queue_))scans_.pop_front();}});
     diag_sub_=create_subscription<diagnostic_msgs::msg::DiagnosticArray>(declare_parameter<std::string>("diagnostics_topic","/kinematic_localization/diagnostics"),10,
       [this](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr m){
-        diag_stamp_=rclcpp::Time(m->header.stamp).seconds();healthy_=diag_stamp_>=reset_ && quality(*m,min_inlier_,max_residual_);diag_received_=Steady::now();
+        diag_stamp_=rclcpp::Time(m->header.stamp).seconds();healthy_=quality(*m,min_inlier_,max_residual_,&quality_reason_);diag_received_=Steady::now();
+        if(diag_stamp_<reset_){healthy_=false;quality_reason_="ICP diagnostics predate initial pose";}
         if(!healthy_){map_.clear();map_stamp_=0;scans_.clear();previous_.clear();}
       });
     drive_sub_=create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(declare_parameter<std::string>("drive_topic","/obca/drive"),1,
@@ -107,9 +108,15 @@ class Planner : public rclcpp::Node {
     const double t=now().seconds();
     if(last_clock_>0 && t<last_clock_){armed_=false;map_.clear();history_.clear();scans_.clear();stop("clock reset: initial pose required");}
     last_clock_=t;
+    if(t<=0){stop("ROS clock not started: check /clock or set use_sim_time:=false for standard gym");return;}
     if(!armed_ || awaiting_pose_ || history_.empty()){stop("waiting for initial pose and ICP");return;}
-    if(!healthy_ || age(diag_received_)>timeout_ || t-diag_stamp_>timeout_ || t<diag_stamp_ || age(pose_received_)>timeout_ ||
-       t-history_.back().first>timeout_ || t<history_.back().first){stop("stale or degraded localization");return;}
+    if(diag_received_==Steady::time_point{}){stop("waiting for ICP diagnostics");return;}
+    if(t<diag_stamp_ || t<history_.back().first){stop("localization stamp is in the future: check consistent use_sim_time and /clock");return;}
+    if(age(diag_received_)>timeout_ || t-diag_stamp_>timeout_){
+      stop("stale ICP diagnostics: receipt_age="+std::to_string(age(diag_received_))+"; stamp_age="+std::to_string(t-diag_stamp_));return;}
+    if(age(pose_received_)>timeout_ || t-history_.back().first>timeout_){
+      stop("stale ICP pose: receipt_age="+std::to_string(age(pose_received_))+"; stamp_age="+std::to_string(t-history_.back().first));return;}
+    if(!healthy_){stop(quality_reason_);return;}
     while(!scans_.empty()){if(!integrate(*scans_.front(),t))break;scans_.pop_front();}
     if(map_stamp_<=0 || t-map_stamp_>timeout_ || age(map_received_)>timeout_){stop("waiting for fresh synchronized scan/TF");return;}
     const Pose ego=history_.back().second;
@@ -139,7 +146,7 @@ class Planner : public rclcpp::Node {
     status("valid; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size()));
   }
   Config c_;LocalMap map_;tf2_ros::Buffer buffer_;tf2_ros::TransformListener listener_;
-  std::string frame_,base_,scan_convention_;double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
+  std::string frame_,base_,scan_convention_,quality_reason_;double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
   int max_queue_{};bool no_return_free_{},armed_{false},awaiting_pose_{true},healthy_{false};
   double reset_{},map_stamp_{},diag_stamp_{},last_clock_{},steering_{};Pose initial_;
   Steady::time_point pose_received_{},diag_received_{},map_received_{};

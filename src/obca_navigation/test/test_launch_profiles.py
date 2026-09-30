@@ -99,7 +99,7 @@ class LaunchProfiles(unittest.TestCase):
     def test_sim_profile(self):
         nodes = self.nodes('sim.yaml')
         for node in nodes.values():
-            self.assertIs(node['use_sim_time'], True)
+            self.assertIs(node['use_sim_time'], False)
             self.assertEqual(node['base_frame'], 'ego_racecar/base_link')
         for name in ('obca_planner', 'obca_tracker'):
             self.assertEqual(nodes[name]['drive_topic'], '/drive')
@@ -113,11 +113,11 @@ class LaunchProfiles(unittest.TestCase):
         self.assertIs(nodes['kinematic_localization']['slam_mode'], True)
 
     def test_cli_overrides_profile_for_all_consumers(self):
-        nodes = self.nodes('sim.yaml', use_sim_time='false', drive_topic='/test/drive',
+        nodes = self.nodes('sim.yaml', use_sim_time='true', drive_topic='/test/drive',
                            wheel_odom_topic='/test/odom', base_frame='test_base',
                            scan_topic='/test/scan', publish_map_odom_tf='true')
         for node in nodes.values():
-            self.assertIs(node['use_sim_time'], False)
+            self.assertIs(node['use_sim_time'], True)
             self.assertEqual(node['base_frame'], 'test_base')
         self.assertEqual(nodes['obca_planner']['scan_topic'], '/test/scan')
         self.assertEqual(nodes['obca_tracker']['drive_topic'], '/test/drive')

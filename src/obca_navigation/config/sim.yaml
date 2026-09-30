@@ -1,7 +1,8 @@
 /**:
   ros__parameters:
-    # Requires the simulator to publish /clock. Override use_sim_time:=false otherwise.
-    use_sim_time: true
+    # Standard gym bridge stamps messages with wall time and does not publish /clock.
+    # Enable use_sim_time only for a bridge using /clock for every sensor and TF stamp.
+    use_sim_time: false
     map_frame: map
     base_frame: ego_racecar/base_link
     scan_topic: /scan

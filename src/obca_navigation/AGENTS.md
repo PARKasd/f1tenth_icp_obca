@@ -20,3 +20,8 @@
   environment-specific launches use the hardware mux or simulator topic described above.
 - test/test_launch_profiles.py checks launch wiring and parameter precedence with lightweight
   launch API doubles. Passing it does not establish ROS runtime compatibility.
+
+- Standard gym uses wall time (use_sim_time=false). Enable simulated time only when the
+  bridge publishes /clock and stamps sensors/TF in that same clock domain.
+- Planner stop statuses distinguish clock mismatch, stale pose/diagnostics, and ICP quality
+  with measured values. Preserve both arrival-time watchdogs and diagnostic quality checks.

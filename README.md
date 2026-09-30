@@ -42,7 +42,7 @@ colcon test-result --verbose
 | 실행 파일 | 설정 파일 | 시간 | 휠 odometry | 제어 출력 |
 |---|---|---|---|---|
 | `navigation_real.launch.py` | `config/real.yaml` | 실제 시간 | `/odom` | `/drive_autonomous` |
-| `navigation_sim.launch.py` | `config/sim.yaml` | `/clock` | `/ego_racecar/odom` | `/drive` |
+| `navigation_sim.launch.py` | `config/sim.yaml` | 실제 시간 (gym 기본) | `/ego_racecar/odom` | `/drive` |
 | `navigation.launch.py` | 공통 설정만 | 실제 시간 | `/odom` | `/obca/drive` |
 
 ```zsh
@@ -57,8 +57,9 @@ ros2 launch obca_navigation navigation_real.launch.py drive_topic:=/obca/drive
 ```
 
 환경에 맞는 명령 하나만 실행합니다. 시뮬용 기본값은 `base_frame=ego_racecar/base_link`,
-`odom_frame=ego_racecar/odom`, `publish_map_odom_tf=false`입니다. `/clock`을 발행하지 않는
-gym 버전에서는 `use_sim_time:=false`를 추가하십시오. 실제 프레임·토픽 이름이 다르면
+`odom_frame=ego_racecar/odom`, `publish_map_odom_tf=false`, `use_sim_time=false`입니다.
+일반 gym bridge는 실제 시간으로 센서를 발행하며 `/clock`을 제공하지 않습니다.
+`/clock`과 센서·TF 시각을 함께 사용하는 시뮬만 `use_sim_time:=true`로 실행하십시오. 실제 프레임·토픽 이름이 다르면
 `base_frame`, `odom_frame`, `wheel_odom_topic`, `scan_topic`, `drive_topic` 인자로 변경합니다.
 명령행 인자는 공통 YAML과 환경별 YAML보다 우선합니다.
 

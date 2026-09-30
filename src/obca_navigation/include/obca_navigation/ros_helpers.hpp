@@ -35,7 +35,9 @@ inline geometry_msgs::msg::Pose poseMessage(const Pose&p) {
 }
 using Steady=std::chrono::steady_clock;
 inline double age(Steady::time_point t) {return std::chrono::duration<double>(Steady::now()-t).count();}
-inline bool quality(const diagnostic_msgs::msg::DiagnosticArray &msg,double min_inlier,double max_residual) {
+inline bool quality(const diagnostic_msgs::msg::DiagnosticArray &msg,double min_inlier,double max_residual,
+                    std::string *reason=nullptr) {
+  if(reason)*reason="missing ICP diagnostic fields";
   for(const auto &s:msg.status) {
     double inlier=-1,residual=std::numeric_limits<double>::infinity(),dead=1;
     bool converged=false,rejected=true,impermissible=true;
@@ -46,9 +48,14 @@ inline bool quality(const diagnostic_msgs::msg::DiagnosticArray &msg,double min_
       if(kv.key=="converged")converged=kv.value=="true";
       if(kv.key=="gate_rejected")rejected=kv.value!="false";
       if(kv.key=="pose_impermissible")impermissible=kv.value!="false";
-    }}catch(const std::exception&){return false;}
+    }}catch(const std::exception&){if(reason)*reason="invalid ICP diagnostic number";return false;}
     if(s.level<2 && converged && !rejected && !impermissible && std::isfinite(inlier+residual+dead) &&
        inlier>=min_inlier && residual>=0 && residual<=max_residual && dead==0)return true;
+    if(reason)*reason="ICP quality: level="+std::to_string(s.level)+
+      "; converged="+std::to_string(converged)+"; inlier="+std::to_string(inlier)+
+      " (min="+std::to_string(min_inlier)+"); residual="+std::to_string(residual)+
+      " (max="+std::to_string(max_residual)+"); dead_reckoning_sec="+std::to_string(dead)+
+      "; gate_rejected="+std::to_string(rejected)+"; pose_impermissible="+std::to_string(impermissible);
   }
   return false;
 }
