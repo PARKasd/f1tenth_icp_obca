@@ -1,0 +1,9 @@
+build/
+install/
+log/
+.tools/
+__pycache__/
+*.pyc
+*.kissmap
+*.bag
+*.mcap

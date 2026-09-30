@@ -1,0 +1,65 @@
+#pragma once
+#include <cmath>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace obca {
+struct Pose { double x{}, y{}, yaw{}, v{}; };
+struct Box { double xmin{}, ymin{}, xmax{}, ymax{}; };
+struct State : Pose { double steering{}, acceleration{}; };
+struct Config {
+  int horizon{16}, max_obstacles{64}, max_iterations{120};
+  double dt{0.2}, wheelbase{0.3302}, front{0.38}, rear{0.14}, half_width{0.16};
+  double margin{0.06}, max_speed{0.8}, max_steering{0.41}, max_steering_rate{1.0};
+  double max_accel{1.0}, max_decel{1.5}, max_lateral_accel{1.5};
+  double solve_seconds{0.15}, tolerance{1e-5}, validation_tolerance{1e-3};
+  double position_weight{8.0}, heading_weight{0.5}, speed_weight{1.0};
+  double steering_weight{0.2}, acceleration_weight{0.1}, smooth_weight{1.0};
+  double grid_resolution{0.1}, map_radius{6.0}, map_ttl{2.0};
+  double reference_distance{2.5}, reference_clearance{0.23}, validation_step{0.04};
+  double goal_forward_weight{0.5}, goal_lateral_weight{0.1}, goal_path_weight{0.1}, goal_continuity_weight{0.3};
+  void validate() const;
+};
+double angle(double a);
+double distance(const Pose &a, const Pose &b);
+bool overlap(const Pose &p, double front, double rear, double half_width, const Box &b);
+struct Grid {
+  int width{}, height{};
+  double resolution{}, x0{}, y0{};
+  std::vector<int> cells; // -1 unknown, 0 observed free, 100 occupied
+  Pose known_body{}; // The robot itself is known to occupy this region, even in the rear blind spot.
+  bool has_known_body{false};
+  int index(double x, double y) const;
+  Pose center(int index) const;
+  bool footprint(const Pose &p, const Config &c) const;
+};
+class LocalMap {
+ public:
+  explicit LocalMap(Config c) : c_(c) {}
+  void clear() { cells_.clear(); }
+  void ray(double ox, double oy, double ex, double ey, double time);
+  void hit(double x, double y, double time);
+  void ownFootprint(const Pose &pose, double time);
+  Grid snapshot(const Pose &p, double time);
+ private:
+  struct Cell { int value; double time; };
+  Config c_;
+  std::map<std::pair<int,int>, Cell> cells_;
+};
+std::vector<Pose> reference(const Grid &grid, const Pose &ego, const Config &c,
+                            const std::vector<State> &previous = {});
+std::vector<Box> obstacles(const Grid &grid, const Pose &ego, double reach);
+bool validatePath(const Grid &grid, const std::vector<State> &path, const Config &c,
+                  std::string &reason);
+struct Solution {
+  bool success{false};
+  std::string reason;
+  std::vector<State> states;
+  double elapsed_ms{}, max_violation{};
+};
+Solution solve(const Pose &ego, double steering, const std::vector<Pose> &reference,
+               const std::vector<Box> &obstacles, const Config &config,
+               const std::vector<State> &warm = {});
+} // namespace obca

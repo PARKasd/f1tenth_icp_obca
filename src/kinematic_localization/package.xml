@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>kinematic_localization</name>
+  <version>0.1.0</version>
+  <description>Kinematic-ICP based map localization (frozen voxel map) for F1TENTH, drop-in compatible with particle_filter_cpp (MCL) outputs (/pf/pose/odom + map-&gt;odom TF). Includes an offline mapping node that builds .kissmap point maps from rosbags.</description>
+  <maintainer email="parkm@example.com">parkm</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_msgs</depend>
+  <depend>laser_geometry</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>std_srvs</depend>
+  <depend>diagnostic_msgs</depend>
+  <!-- /global_waypoints auto-init (MCL particle_filter_cpp 호환) -->
+  <depend>f110_msgs</depend>
+
+  <!-- Offline mapping node -->
+  <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_storage</depend>
+
+  <!-- CPP core dependencies (fetched via FetchContent when not on the system) -->
+  <depend>eigen</depend>
+  <depend>tbb</depend>
+
+  <exec_depend>ros2launch</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

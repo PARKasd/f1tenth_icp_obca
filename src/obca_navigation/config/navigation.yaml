@@ -1,0 +1,78 @@
+/**:
+  ros__parameters:
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan
+    pose_topic: /pf/pose/odom
+    initial_pose_topic: /initialpose
+    diagnostics_topic: /kinematic_localization/diagnostics
+    waypoints_topic: /obca/waypoints
+    drive_topic: /obca/drive
+    # Low-speed prototype. Geometry is measured from the base_link reference point.
+    horizon: 16
+    dt: 0.2
+    wheelbase: 0.3302
+    front: 0.38
+    rear: 0.14
+    half_width: 0.16
+    margin: 0.06
+    max_speed: 0.8
+    max_steering: 0.41
+    max_steering_rate: 1.0
+    max_accel: 1.0
+    max_decel: 1.5
+    max_lateral_accel: 1.5
+    max_obstacles: 64
+    max_iterations: 120
+    solve_seconds: 0.15
+    tolerance: 0.00001
+    validation_tolerance: 0.001
+    position_weight: 8.0
+    heading_weight: 0.5
+    speed_weight: 1.0
+    steering_weight: 0.2
+    acceleration_weight: 0.1
+    smooth_weight: 1.0
+    grid_resolution: 0.1
+    map_radius: 6.0
+    map_ttl: 2.0
+    reference_distance: 2.5
+    reference_clearance: 0.23
+    validation_step: 0.04
+    goal_forward_weight: 0.5
+    goal_lateral_weight: 0.1
+    goal_path_weight: 0.1
+    goal_continuity_weight: 0.3
+    input_timeout: 0.3
+    min_inlier_ratio: 0.4
+    max_icp_residual: 0.35
+obca_planner:
+  ros__parameters:
+    path_topic: /obca/path
+    grid_topic: /obca/local_grid
+    status_topic: /obca/status
+    planning_period: 0.1
+    scan_stamp_convention: begin
+    # Enable only if the sensor documents +inf/range_max as a valid clear ray.
+    no_return_is_free: false
+    pose_history_seconds: 2.0
+    scan_queue_size: 10
+    reset_position_tolerance: 0.5
+    reset_yaw_tolerance: 0.35
+obca_tracker:
+  ros__parameters:
+    control_period: 0.02
+    path_timeout: 0.3
+    lookahead: 0.45
+    max_tracking_error: 0.25
+    goal_tolerance: 0.12
+kinematic_localization:
+  ros__parameters:
+    slam_mode: true
+    require_initial_pose: true
+    auto_init_from_waypoints: false
+    map_name: ""
+    smoothing_enable: false
+    diagnostics_enable: true
+    map_output_file: slam_map.kissmap
+    map_publish_period_sec: 2.0
