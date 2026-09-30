@@ -31,6 +31,9 @@ ROS 2 Jazzy 저속 프로토타입입니다. 모든 런타임 노드는 C++17입
    범위만 유지하고, ICP의 누적 지도는 별도로 저장할 수 있습니다.
 7. 연결된 free 셀 안에서 Dijkstra 탐색을 수행합니다. 대각선으로 막힌 코너를 통과하지
    않으며 전진성·이동 거리·이전 경로와의 연속성을 점수화해 전방 목표점을 선택합니다.
+   초기화 직후에는 `startup_straight_distance`만큼 전진할 때까지 별도의 직진 reference를
+   사용합니다. 관측된 공간에서 차체 전체가 통과하는 구간만 생성하고, 최적화의 조향각과
+   yaw를 고정합니다. 앞이 막혔으면 정지하며 강제로 직진하지 않습니다.
 8. 기준 경로와 이전 성공 해를 초기값으로 사용해 OBCA 최적화를 수행합니다.
 9. 해 상태, 시간 제한, 모든 변수·제약 잔차, 연속 구간의 차량 swept footprint를 검사합니다.
    검사에 실패하면 빈 `WpntArray`를 발행하며 추종기는 정지합니다.
@@ -64,7 +67,8 @@ Gᵀ mu + R(yaw)ᵀ Aᵀ lambda = 0
 
 목적함수는 기준 위치·방향·속도 추종과 조향·가속도·조향 변화의 합입니다.
 속도, 조향각, 조향 변화율, 가감속, 횡가속도를 제한합니다.
-Ipopt C API와 희소 analytic Jacobian을 사용하고 Hessian은 limited-memory로 근사합니다.
+Ipopt C API와 희소 analytic Jacobian·Hessian을 사용합니다. Hessian은 목적함수와
+제약 Lagrangian의 해석적 2차 미분이며, 수치 미분 회귀 검사로 확인합니다.
 최적화가 끝나면 별도로 모든 제약 잔차를 계산합니다.
 
 충돌 검사는 인접 상태 사이를 세분하고, 양 끝 직사각형의 convex hull에 회전 호의
@@ -73,6 +77,11 @@ sagitta를 더해 보간 구간 전체를 검사합니다. occupied 셀에는 ma
 
 서로 인접한 occupied 셀만 사각형으로 합칩니다. 도달 가능 범위를 감싼 사각 ROI 안의
 장애물을 모두 포함하며, `max_obstacles`를 초과하면 정지합니다. 일부를 임의로 버리지 않습니다.
+최적화의 시점별 장애물 제약은 별도로 줄입니다. 각 시점까지의 최대 이동 거리를 속도·가감속
+한계와 종단 정지 조건으로 계산하고, 차체 외접 반경과 안전 여유·검증 오차까지 더해도
+도달할 수 없는 장애물만 해당 시점의 제약에서 제외합니다. 출발 직진 모드에서는 고정 yaw와
+직선 위치 한계로 더 좁은 도달 영역을 사용합니다. 최종 검증은 생략한 장애물을 포함한 전체
+관측 지도를 그대로 사용합니다. `/obca/status`의 `pairs`는 실제 OBCA 제약 쌍 개수입니다.
 unknown 공간은 현재 구현에서 최적화 후의 전체 footprint 검사로 막습니다. 따라서 경로가
 존재하더라도 최적화가 unknown 쪽으로 휘면 정지할 수 있으며, 완전한 탐색 알고리즘은 아닙니다.
 
@@ -119,6 +128,7 @@ navigation YAML과 launch 선택값으로 덮어씁니다.
 | `input_timeout/path_timeout` | 0.3 / 0.3 s | ROS stamp와 실제 수신 경과시간 모두 검사 |
 | `grid_resolution/map_radius/map_ttl` | 0.1 m / 6 m / 2 s | 계획용 지도 |
 | `reference_distance/reference_clearance` | 2.5 / 0.23 m | 기준 경로 탐색 범위·중심 여유 |
+| `startup_straight_distance` | 0.3 m | 초기화 후 직진 제약을 유지하는 전방 이동 거리, 0이면 사용하지 않음 |
 | `goal_*_weight` | YAML 참조 | 전진성·측방향·경로 길이·기존 목표점 연속성 |
 | `lookahead/max_tracking_error` | 0.45 / 0.25 m | Pure Pursuit 전방거리·오차 정지 한계 |
 | `min_inlier_ratio/max_icp_residual` | 0.4 / 0.35 m | ICP 진단 통과 기준, 수렴도 요구 |

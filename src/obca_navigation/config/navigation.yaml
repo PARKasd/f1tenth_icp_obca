@@ -60,6 +60,8 @@ obca_planner:
     scan_queue_size: 10
     reset_position_tolerance: 0.5
     reset_yaw_tolerance: 0.35
+    # Keep zero steering while accumulating observations behind the starting pose.
+    startup_straight_distance: 0.3
 obca_tracker:
   ros__parameters:
     control_period: 0.02

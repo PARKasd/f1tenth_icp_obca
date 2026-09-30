@@ -9,7 +9,7 @@ int main()try {
   using namespace obca;
   Config c;c.solve_seconds=5;c.validate();Pose ego{};
   auto g=grid();
-  check(derivativeError()<1e-6,"analytic Jacobian/gradient mismatch");
+  check(derivativeError()<1e-6,"analytic gradient/Jacobian/Hessian mismatch");
   check(g.footprint(ego,c),"empty-space footprint");
   g.cells[g.index(0.3,0.0)]=-1;check(!g.footprint(ego,c),"unknown space must block body");
   g=grid();g.cells[g.index(0.3,0)]=100;check(!g.footprint(ego,c),"occupied body accepted");
@@ -25,6 +25,9 @@ int main()try {
   auto corridor=solve(ego,0,ref,walls,c);
   std::cout<<"corridor: "<<corridor.reason<<" "<<corridor.elapsed_ms<<" ms\n";
   check(corridor.success,"OBCA corridor solve failed");
+  check(corridor.collision_pairs<static_cast<int>((c.horizon+1)*walls.size()),"unreachable knot constraints were retained");
+  const auto far=solve(ego,0,ref,{{10,10,11,11}},c);
+  check(far.success && far.collision_pairs==0,"unreachable obstacle was not excluded");
   for(const auto&p:corridor.states)for(const auto&b:walls)check(!overlap(p,c.front,c.rear,c.half_width,b),"OBCA intersects wall");
   // A static obstacle on the original centreline: reference search must go around it,
   // and the optimized vehicle rectangle must clear it, not just its centre point.
@@ -32,6 +35,9 @@ int main()try {
   for(int i=0;i<static_cast<int>(detour_grid.cells.size());++i){const auto p=detour_grid.center(i);
     if(p.x>=1.1 && p.x<=1.4 && std::abs(p.y)<=0.15)detour_grid.cells[i]=100;}
   const auto detour_ref=reference(detour_grid,ego,c);
+  const auto startup_blocked=straightReference(detour_grid,ego,c);
+  check(!startup_blocked.empty() && startup_blocked.back().x<1.0-c.front,
+    "startup straight reference crossed an observed obstacle");
   const auto detour_boxes=obstacles(detour_grid,ego,4);
   auto detour=solve(ego,0,detour_ref,detour_boxes,c);
   std::cout<<"detour: "<<detour.reason<<" "<<detour.elapsed_ms<<" ms\n";
@@ -49,6 +55,7 @@ int main()try {
   unknown.has_known_body=true;unknown.known_body=ego;
   check(unknown.footprint(ego,c),"exact physical body is not recognized in blind spot");
   check(reference(unknown,ego,c).empty(),"bootstrap connector entered unknown space");
+  check(straightReference(unknown,ego,c).empty(),"startup straight reference entered unknown space");
   Pose outside=ego;outside.y=0.02;
   check(!unknown.footprint(outside,c),"self-footprint exemption leaked into unknown space");
   LocalMap map(c);map.ray(0,0,2,0,1);map.hit(2,0,1);
@@ -103,6 +110,14 @@ int main()try {
     const auto route=reference(observed_grid,start,c);
     if(route.size()<2)std::cerr<<"missing rotated reference at heading "<<heading<<'\n';
     check(route.size()>2,"rotated scan cannot bootstrap reference");
+    const auto straight=straightReference(observed_grid,start,c);
+    check(straight.size()>2,"observed startup straight reference missing");
+    Config startup_config=c;startup_config.max_obstacles=128; // Isolate geometry from the independent budget test.
+    const auto startup=solve(start,0,straight,obstacles(observed_grid,start,4),startup_config,{},true);
+    if(!startup.success)std::cerr<<"startup heading "<<heading<<": "<<startup.reason<<'\n';
+    check(startup.success,"zero-steering startup solve failed");
+    for(const auto&p:startup.states)check(std::abs(p.steering)<1e-8 && std::abs(p.yaw-start.yaw)<1e-8,"startup steering constraint missing");
+    check(validatePath(observed_grid,startup.states,c,reason),"startup swept footprint entered unknown space");
   }
   // Receding-horizon execution around a left corner, with perfect model actuation.
   // This tests repeated replanning/warm starts, not the ROS tracker or physical vehicle.

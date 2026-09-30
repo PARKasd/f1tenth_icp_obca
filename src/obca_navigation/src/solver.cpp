@@ -15,10 +15,43 @@ struct Problem {
   std::vector<Pose> targets;
   std::vector<double> lo,hi,gl,gu;
   Clock::time_point start=Clock::now();
+  std::vector<std::pair<int,int>> pairs;
+  std::map<std::pair<int,int>,int> hindices;
+  std::vector<std::pair<int,int>> hpattern;
   int controls()const{return 4*(c.horizon+1);}
-  int dual(int i,int j)const{return controls()+2*c.horizon+8*(i*static_cast<int>(boxes.size())+j);}
-  int variables()const{return controls()+2*c.horizon+8*(c.horizon+1)*static_cast<int>(boxes.size());}
-  int constraints()const{return 6*c.horizon+4*(c.horizon+1)*static_cast<int>(boxes.size());}
+  int dual(int pair)const{return controls()+2*c.horizon+8*pair;}
+  int variables()const{return controls()+2*c.horizon+8*static_cast<int>(pairs.size());}
+  int constraints()const{return 6*c.horizon+4*static_cast<int>(pairs.size());}
+
+  template<class Add> void hessian(const double *z,double factor,const double *lambda,Add add)const {
+    auto weight=[&](int row){return lambda?lambda[row]:0.0;};
+    for(int i=0;i<=c.horizon;++i){const int k=4*i;
+      add(k,k,2*factor*c.position_weight);add(k+1,k+1,2*factor*c.position_weight);
+      add(k+2,k+2,factor*c.heading_weight*std::cos(z?z[k+2]-targets[i].yaw:0));
+      add(k+3,k+3,2*factor*c.speed_weight);
+    }
+    for(int i=0;i<c.horizon;++i){const int k=4*i,u=controls()+2*i,r=6*i;
+      const double yaw=z?z[k+2]:0,v=z?z[k+3]:0,t=std::tan(z?z[u]:0),sec=1+t*t;
+      add(u,u,2*factor*(c.steering_weight+c.smooth_weight));add(u+1,u+1,2*factor*c.acceleration_weight);
+      if(i){add(u,u-2,-2*factor*c.smooth_weight);add(u-2,u-2,2*factor*c.smooth_weight);}
+      add(k+2,k+2,c.dt*v*(weight(r)*std::cos(yaw)+weight(r+1)*std::sin(yaw)));
+      add(k+2,k+3,c.dt*(weight(r)*std::sin(yaw)-weight(r+1)*std::cos(yaw)));
+      add(k+3,u,(-weight(r+2)*c.dt+2*weight(r+5)*v)*sec/c.wheelbase);
+      add(u,u,(-weight(r+2)*c.dt*v+weight(r+5)*v*v)*2*t*sec/c.wheelbase);
+      add(k+3,k+3,weight(r+5)*2*t/c.wheelbase);
+    }
+    for(int pair=0;pair<static_cast<int>(pairs.size());++pair){
+      const int k=4*pairs[pair].first,d=dual(pair),r=6*c.horizon+4*pair;
+      const double theta=z?z[k+2]:0,cs=std::cos(theta),sn=std::sin(theta);
+      const double nx=z?z[d]-z[d+2]:0,ny=z?z[d+1]-z[d+3]:0;
+      for(int a=0;a<4;++a)add(d+a,d+a,2*weight(r));
+      add(d,d+2,-2*weight(r));add(d+1,d+3,-2*weight(r));
+      add(k+2,k+2,weight(r+1)*(-cs*nx-sn*ny)+weight(r+2)*(sn*nx-cs*ny));
+      const double hx=-weight(r+1)*sn-weight(r+2)*cs,hy=weight(r+1)*cs-weight(r+2)*sn;
+      add(k+2,d,hx);add(k+2,d+2,-hx);add(k+2,d+1,hy);add(k+2,d+3,-hy);
+      add(k,d,weight(r+3));add(k,d+2,-weight(r+3));add(k+1,d+1,weight(r+3));add(k+1,d+3,-weight(r+3));
+    }
+  }
 
   // Both sparsity and values use this exact traversal. No finite differencing at runtime.
   template<class Add> void jacobian(const double *z,Add add)const {
@@ -34,8 +67,9 @@ struct Problem {
       add(r+4,u,1);if(i) add(r+4,u-2,-1);
       add(r+5,k+3,2*p[3]*t/c.wheelbase);add(r+5,u,p[3]*p[3]*sec/c.wheelbase);
     }
-    for(int i=0;i<=c.horizon;++i) for(int j=0;j<static_cast<int>(boxes.size());++j) {
-      const int k=4*i,d=dual(i,j),r=6*c.horizon+4*(i*static_cast<int>(boxes.size())+j);
+    for(int pair=0;pair<static_cast<int>(pairs.size());++pair) {
+      const auto [i,j]=pairs[pair];
+      const int k=4*i,d=dual(pair),r=6*c.horizon+4*pair;
       const double theta=z?z[k+2]:0,cs=std::cos(theta),sn=std::sin(theta);
       const double nx=z?z[d]-z[d+2]:0,ny=z?z[d+1]-z[d+3]:0;
       add(r,d,2*nx);add(r,d+2,-2*nx);add(r,d+1,2*ny);add(r,d+3,-2*ny);
@@ -59,8 +93,9 @@ struct Problem {
       g[r+4]=z[u]-(i?z[u-2]:last_steering);
       g[r+5]=z[k+3]*z[k+3]*std::tan(z[u])/c.wheelbase;
     }
-    for(int i=0;i<=c.horizon;++i) for(int j=0;j<static_cast<int>(boxes.size());++j) {
-      const int k=4*i,d=dual(i,j),r=6*c.horizon+4*(i*static_cast<int>(boxes.size())+j);
+    for(int pair=0;pair<static_cast<int>(pairs.size());++pair) {
+      const auto [i,j]=pairs[pair];
+      const int k=4*i,d=dual(pair),r=6*c.horizon+4*pair;
       const double nx=z[d]-z[d+2],ny=z[d+1]-z[d+3],cs=std::cos(z[k+2]),sn=std::sin(z[k+2]);
       const Box &b=boxes[j];
       g[r]=nx*nx+ny*ny;
@@ -98,7 +133,14 @@ Bool eval_jac(Index,Number*x,Bool,Index,Index,Index*rows,Index*cols,Number*value
   int i=0;static_cast<Problem*>(data)->jacobian(values?x:nullptr,[&](int r,int c,double v){
     if(values)values[i]=v;else{rows[i]=r;cols[i]=c;}++i;});return true;
 }
-Bool eval_h(Index,Number*,Bool,Number,Index,Number*,Bool,Index,Index*,Index*,Number*,UserDataPtr){return true;}
+Bool eval_h(Index,Number*x,Bool,Number factor,Index,Number*lambda,Bool,Index count,Index*rows,Index*cols,Number*values,UserDataPtr data){
+  auto&p=*static_cast<Problem*>(data);
+  if(!values){for(int i=0;i<count;++i){rows[i]=p.hpattern[i].first;cols[i]=p.hpattern[i].second;}}
+  else {std::fill(values,values+count,0.0);p.hessian(x,factor,lambda,[&](int a,int b,double v){
+    if(a<b)std::swap(a,b);
+    values[p.hindices.at({a,b})]+=v;});}
+  return true;
+}
 Bool intermediate(Index,Index,Number,Number,Number,Number,Number,Number,Number,Number,Index,UserDataPtr data){
   auto &p=*static_cast<Problem*>(data);
   return std::chrono::duration<double>(Clock::now()-p.start).count()<p.c.solve_seconds;
@@ -122,31 +164,58 @@ std::vector<Pose> sampleTargets(const std::vector<Pose>&ref,const Pose&ego,const
 #ifdef OBCA_TESTING
 double derivativeError() {
   Config c;c.horizon=4;
-  Problem p{c,{},0.1,{{1,1,2,2}},std::vector<Pose>(5),{},{},{},{},Clock::now()};
+  Problem p{c,{},0.1,{{1,1,2,2}},std::vector<Pose>(5),{},{},{},{},Clock::now(),{},{},{}};
+  for(int i=0;i<=c.horizon;++i)p.pairs.push_back({i,0});
   std::vector<double> z(p.variables(),0.2),ga(p.constraints()),gb(p.constraints());
   for(int i=0;i<p.variables();++i)z[i]+=0.01*(i%7);
   std::vector<std::vector<double>> jac(p.constraints(),std::vector<double>(p.variables(),0));
   p.jacobian(z.data(),[&](int r,int k,double v){jac[r][k]+=v;});
   std::vector<double> gradient(p.variables());p.objective(z.data(),gradient.data());
+  std::vector<double> lambda(p.constraints(),0.37),la(p.variables()),lb(p.variables());
+  for(int r=0;r<p.constraints();++r)lambda[r]=0.13+0.007*r;
+  std::vector<std::vector<double>> hess(p.variables(),std::vector<double>(p.variables(),0));
+  p.hessian(z.data(),0.7,lambda.data(),[&](int a,int b,double v){hess[a][b]+=v;if(a!=b)hess[b][a]+=v;});
+  auto lagrangian=[&](std::vector<double>&out){p.objective(z.data(),out.data());for(auto&v:out)v*=0.7;
+    p.jacobian(z.data(),[&](int r,int col,double v){out[col]+=lambda[r]*v;});};
   double error=0;constexpr double step=1e-6;
   for(int k=0;k<p.variables();++k) {
-    z[k]+=step;p.values(z.data(),ga.data());const double fa=p.objective(z.data(),nullptr);
-    z[k]-=2*step;p.values(z.data(),gb.data());const double fb=p.objective(z.data(),nullptr);z[k]+=step;
+    z[k]+=step;p.values(z.data(),ga.data());const double fa=p.objective(z.data(),nullptr);lagrangian(la);
+    z[k]-=2*step;p.values(z.data(),gb.data());const double fb=p.objective(z.data(),nullptr);lagrangian(lb);z[k]+=step;
     error=std::max(error,std::abs(gradient[k]-(fa-fb)/(2*step)));
     for(int r=0;r<p.constraints();++r)error=std::max(error,std::abs(jac[r][k]-(ga[r]-gb[r])/(2*step)));
+    for(int r=0;r<p.variables();++r)error=std::max(error,std::abs(hess[r][k]-(la[r]-lb[r])/(2*step)));
   }
   return error;
 }
 #endif
-Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,const std::vector<Box> &boxes,const Config &c,const std::vector<State> &warm) {
+Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,const std::vector<Box> &boxes,const Config &c,const std::vector<State> &warm,bool straight_only) {
   Solution result; const auto started=Clock::now();
   c.validate();
   if(ref.size()<2) {result.reason="reference missing: no connected route in observed free space";return result;}
   if(boxes.size()>static_cast<std::size_t>(c.max_obstacles)) {result.reason="obstacle budget exceeded: count="+
     std::to_string(boxes.size())+"; limit="+std::to_string(c.max_obstacles);return result;}
   if(!std::isfinite(ego.x+ego.y+ego.yaw+ego.v+steering) || ego.v<0 || ego.v>c.max_speed+c.validation_tolerance || std::abs(steering)>c.max_steering) {result.reason="initial state outside configured limits";return result;}
-  Problem p{c,ego,steering,boxes,sampleTargets(ref,ego,c),{},{},{},{},started};
+  Problem p{c,ego,steering,boxes,sampleTargets(ref,ego,c),{},{},{},{},started,{},{},{}};
+  const double straight_distance=distance(ego,ref.back());
+  // Bounds follow directly from the discrete speed/acceleration limits and the
+  // terminal stop. Omit a knot/obstacle pair only if no feasible body can reach it.
+  std::vector<double> reachable(c.horizon+1,0);
+  const double padding=std::sqrt(2.0)*(c.margin+c.validation_step)+c.validation_tolerance;
+  const double radius=std::hypot(std::max(c.front,c.rear),c.half_width)+padding;
+  const double reach_error=c.horizon*(std::sqrt(2.0)+c.horizon*c.dt)*c.validation_tolerance;
+  for(int i=0;i<=c.horizon;++i) {
+    if(i)reachable[i]=reachable[i-1]+c.dt*std::min({c.max_speed,ego.v+(i-1)*c.dt*c.max_accel,(c.horizon-i+1)*c.dt*c.max_decel});
+    for(int j=0;j<static_cast<int>(boxes.size());++j){const auto&b=boxes[j];
+      const double separation=std::hypot(ego.x-std::clamp(ego.x,b.xmin,b.xmax),ego.y-std::clamp(ego.y,b.ymin,b.ymax));
+      const bool reachable_body=straight_only?
+        overlap(ego,c.front+std::min(reachable[i],straight_distance)+padding+reach_error,
+          c.rear+padding+reach_error,c.half_width+padding+reach_error,b):
+        separation<=reachable[i]+radius+reach_error;
+      if(reachable_body)p.pairs.push_back({i,j});
+    }
+  }
   const int n=p.variables(),m=p.constraints();
+  result.collision_pairs=static_cast<int>(p.pairs.size());result.variables=n;result.constraints=m;
   const double inf=1e19,reach=c.max_speed*c.horizon*c.dt;
   p.lo.assign(n,0);p.hi.assign(n,inf);p.gl.assign(m,0);p.gu.assign(m,0);
   std::vector<double> z(n,0),g(m,0);
@@ -159,9 +228,15 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
     const double values[]={seed.x,seed.y,seed.yaw,seed.v};
     for(int a=0;a<4;++a)z[k+a]=values[a];
     p.lo[k]=ego.x-reach;p.hi[k]=ego.x+reach;p.lo[k+1]=ego.y-reach;p.hi[k+1]=ego.y+reach;
+    if(straight_only){const double end_x=ego.x+straight_distance*std::cos(ego.yaw),end_y=ego.y+straight_distance*std::sin(ego.yaw);
+      p.lo[k]=std::min(ego.x,end_x);p.hi[k]=std::max(ego.x,end_x);
+      p.lo[k+1]=std::min(ego.y,end_y);p.hi[k+1]=std::max(ego.y,end_y);}
     p.lo[k+2]=ego.yaw-2*std::acos(-1.0);p.hi[k+2]=ego.yaw+2*std::acos(-1.0);p.hi[k+3]=c.max_speed;
-    for(int j=0;j<static_cast<int>(boxes.size());++j) {
-      const int d=p.dual(i,j),r=6*c.horizon+4*(i*static_cast<int>(boxes.size())+j);
+    if(straight_only)p.lo[k+2]=p.hi[k+2]=z[k+2]=ego.yaw;
+  }
+    for(int pair=0;pair<static_cast<int>(p.pairs.size());++pair) {
+      const auto [i,j]=p.pairs[pair];const Pose seed{z[4*i],z[4*i+1],z[4*i+2],z[4*i+3]};
+      const int d=p.dual(pair),r=6*c.horizon+4*pair;
       // The independent swept validator expands both body axes. A Euclidean
       // clearance of sqrt(2)*padding also covers the expanded corners.
       p.gl[r]=-inf;p.gu[r]=1;
@@ -173,7 +248,6 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
       const double mx=-std::cos(seed.yaw)*nx-std::sin(seed.yaw)*ny,my=std::sin(seed.yaw)*nx-std::cos(seed.yaw)*ny;
       z[d+4]=std::max(0.0,mx);z[d+5]=std::max(0.0,my);z[d+6]=std::max(0.0,-mx);z[d+7]=std::max(0.0,-my);
     }
-  }
   const double initial[]={ego.x,ego.y,ego.yaw,ego.v};
   for(int k=0;k<4;++k)p.lo[k]=p.hi[k]=z[k]=initial[k];
   p.lo[4*c.horizon+3]=p.hi[4*c.horizon+3]=z[4*c.horizon+3]=0;
@@ -181,14 +255,17 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
     const int u=p.controls()+2*i,r=6*i;
     p.lo[u]=-c.max_steering;p.hi[u]=c.max_steering;p.lo[u+1]=-c.max_decel;p.hi[u+1]=c.max_accel;
     z[u]=steering;z[u+1]=std::clamp((z[4*(i+1)+3]-z[4*i+3])/c.dt,-c.max_decel,c.max_accel);
+    if(!warm.empty())z[u]=std::clamp(warm[std::min(warm_start+i,warm.size()-1)].steering,-c.max_steering,c.max_steering);
+    if(straight_only)p.lo[u]=p.hi[u]=z[u]=0;
     p.gl[r+4]=-c.max_steering_rate*c.dt;p.gu[r+4]=c.max_steering_rate*c.dt;
     p.gl[r+5]=-c.max_lateral_accel;p.gu[r+5]=c.max_lateral_accel;
   }
   int nnz=0;p.jacobian(nullptr,[&](int,int,double){++nnz;});
-  IpoptProblem raw=CreateIpoptProblem(n,p.lo.data(),p.hi.data(),m,p.gl.data(),p.gu.data(),nnz,0,0,eval_f,eval_g,eval_grad,eval_jac,eval_h);
+  p.hessian(nullptr,0,nullptr,[&](int a,int b,double){if(a<b)std::swap(a,b);
+    if(p.hindices.emplace(std::make_pair(a,b),static_cast<int>(p.hpattern.size())).second)p.hpattern.push_back({a,b});});
+  IpoptProblem raw=CreateIpoptProblem(n,p.lo.data(),p.hi.data(),m,p.gl.data(),p.gu.data(),nnz,static_cast<int>(p.hpattern.size()),0,eval_f,eval_g,eval_grad,eval_jac,eval_h);
   if(!raw){result.reason="Ipopt creation failed";return result;}
   struct Guard{IpoptProblem p;~Guard(){FreeIpoptProblem(p);}} guard{raw};
-  AddIpoptStrOption(raw,const_cast<char*>("hessian_approximation"),const_cast<char*>("limited-memory"));
   AddIpoptStrOption(raw,const_cast<char*>("mu_strategy"),const_cast<char*>("adaptive"));
   AddIpoptStrOption(raw,const_cast<char*>("sb"),const_cast<char*>("yes"));
   AddIpoptIntOption(raw,const_cast<char*>("print_level"),0);

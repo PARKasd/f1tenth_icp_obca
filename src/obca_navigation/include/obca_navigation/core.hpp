@@ -50,6 +50,7 @@ class LocalMap {
 };
 std::vector<Pose> reference(const Grid &grid, const Pose &ego, const Config &c,
                             const std::vector<State> &previous = {});
+std::vector<Pose> straightReference(const Grid &grid, const Pose &ego, const Config &c);
 std::vector<Box> obstacles(const Grid &grid, const Pose &ego, double reach);
 bool validatePath(const Grid &grid, const std::vector<State> &path, const Config &c,
                   std::string &reason);
@@ -58,8 +59,9 @@ struct Solution {
   std::string reason;
   std::vector<State> states;
   double elapsed_ms{}, max_violation{};
+  int collision_pairs{}, variables{}, constraints{};
 };
 Solution solve(const Pose &ego, double steering, const std::vector<Pose> &reference,
                const std::vector<Box> &obstacles, const Config &config,
-               const std::vector<State> &warm = {});
+               const std::vector<State> &warm = {}, bool straight_only = false);
 } // namespace obca

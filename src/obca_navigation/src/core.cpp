@@ -261,6 +261,20 @@ std::vector<Box> obstacles(const Grid &g,const Pose &ego,double reach) {
   }
   return result;
 }
+std::vector<Pose> straightReference(const Grid &g,const Pose &ego,const Config &c) {
+  if(!g.footprint(ego,c))return {};
+  std::vector<Pose> path{ego};
+  for(double d=g.resolution;d<=c.reference_distance;d+=g.resolution) {
+    Pose next=ego;next.x+=d*std::cos(ego.yaw);next.y+=d*std::sin(ego.yaw);
+    std::vector<State> segment(c.horizon+1);
+    for(int i=0;i<=c.horizon;++i){const double f=static_cast<double>(i)/c.horizon;
+      segment[i].x=path.back().x+f*(next.x-path.back().x);
+      segment[i].y=path.back().y+f*(next.y-path.back().y);segment[i].yaw=ego.yaw;}
+    std::string reason;if(!validatePath(g,segment,c,reason))break;
+    path.push_back(next);
+  }
+  return path.size()>1?path:std::vector<Pose>{};
+}
 bool validatePath(const Grid &g,const std::vector<State> &path,const Config &c,std::string &reason) {
   if(path.size()!=static_cast<std::size_t>(c.horizon+1)){reason="invalid path length";return false;}
   const double radius=std::hypot(std::max(c.front,c.rear),c.half_width);

@@ -27,3 +27,10 @@
   with measured values. Preserve both arrival-time watchdogs and diagnostic quality checks.
 - If circular reference clearance blocks bootstrap at a LiDAR blind spot, a forward connector
   may seed the search only after swept-footprint validation. Never mark unknown cells free.
+- After initial pose, startup_straight_distance in navigation.yaml selects a zero-steering
+  startup phase. Validate its entire reference and optimized swept body against observed space.
+- Knot/obstacle constraints may be omitted only using conservative reachable-body bounds
+  derived from the enforced dynamics, speed, acceleration and terminal-stop constraints.
+  Account for validation tolerance. Keep full-grid final validation and report pair counts.
+- Keep the sparse objective/Jacobian/Lagrangian Hessian consistent; verify analytical
+  derivatives against finite differences whenever solver equations change.

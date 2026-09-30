@@ -25,9 +25,11 @@ class Planner : public rclcpp::Node {
     history_seconds_=declare_parameter("pose_history_seconds",2.0);max_queue_=declare_parameter("scan_queue_size",10);
     reset_position_tolerance_=declare_parameter("reset_position_tolerance",0.5);
     reset_yaw_tolerance_=declare_parameter("reset_yaw_tolerance",0.35);
+    startup_straight_distance_=declare_parameter("startup_straight_distance",0.3);
     if(!std::isfinite(timeout_+period_+history_seconds_+min_inlier_+max_residual_+reset_position_tolerance_+reset_yaw_tolerance_) ||
        timeout_<=0 || period_<=0 || history_seconds_<=timeout_ || max_queue_<1 ||
        min_inlier_<0 || min_inlier_>1 || max_residual_<=0 || reset_position_tolerance_<=0 || reset_yaw_tolerance_<=0 ||
+       !std::isfinite(startup_straight_distance_) || startup_straight_distance_<0 ||
        (scan_convention_!="begin" && scan_convention_!="end"))throw std::invalid_argument("invalid planner timing/quality settings");
     path_pub_=create_publisher<f110_msgs::msg::WpntArray>(declare_parameter<std::string>("waypoints_topic","/obca/waypoints"),1);
     visual_pub_=create_publisher<nav_msgs::msg::Path>(declare_parameter<std::string>("path_topic","/obca/path"),1);
@@ -36,7 +38,7 @@ class Planner : public rclcpp::Node {
     initial_sub_=create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(declare_parameter<std::string>("initial_pose_topic","/initialpose"),10,
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr m){
         Pose p;if(m->header.frame_id!=frame_ || !poseFrom(m->pose.pose,p)){armed_=false;stop("invalid initial pose");return;}
-        reset_=now().seconds();initial_=p;awaiting_pose_=true;armed_=true;healthy_=false;quality_reason_="waiting for ICP diagnostics after initial pose";diag_received_={};history_.clear();scans_.clear();previous_.clear();map_.clear();map_stamp_=0;stop("initial pose: waiting for new ICP scans");});
+        reset_=now().seconds();initial_=p;startup_=startup_straight_distance_>0;awaiting_pose_=true;armed_=true;healthy_=false;quality_reason_="waiting for ICP diagnostics after initial pose";diag_received_={};history_.clear();scans_.clear();previous_.clear();map_.clear();map_stamp_=0;stop("initial pose: waiting for new ICP scans");});
     odom_sub_=create_subscription<nav_msgs::msg::Odometry>(declare_parameter<std::string>("pose_topic","/pf/pose/odom"),rclcpp::QoS(50),
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m){
         Pose p;const double t=rclcpp::Time(m->header.stamp).seconds();
@@ -124,7 +126,10 @@ class Planner : public rclcpp::Node {
     nav_msgs::msg::OccupancyGrid gm;gm.header.frame_id=frame_;gm.header.stamp=now();gm.info.resolution=grid.resolution;gm.info.width=grid.width;gm.info.height=grid.height;
     gm.info.origin.position.x=grid.x0;gm.info.origin.position.y=grid.y0;gm.info.origin.orientation.w=1;gm.data.assign(grid.cells.begin(),grid.cells.end());grid_pub_->publish(gm);
     if(!grid.footprint(ego,c_)){stop("vehicle footprint not in observed free space");return;}
-    const auto ref=reference(grid,ego,c_,previous_);
+    if(startup_ && (ego.x-initial_.x)*std::cos(initial_.yaw)+(ego.y-initial_.y)*std::sin(initial_.yaw)>=startup_straight_distance_) {
+      startup_=false;previous_.clear();
+    }
+    const auto ref=startup_?straightReference(grid,ego,c_):reference(grid,ego,c_,previous_);
     if(ref.size()<2){stop("reference missing: no connected route in observed free space");return;}
     const double reach=c_.max_speed*c_.horizon*c_.dt+std::hypot(std::max(c_.front,c_.rear),c_.half_width)+
       std::sqrt(2.0)*(c_.margin+c_.validation_step)+c_.validation_tolerance;
@@ -132,9 +137,9 @@ class Planner : public rclcpp::Node {
     if(boxes.size()>static_cast<std::size_t>(c_.max_obstacles)){stop("obstacle budget exceeded: count="+
       std::to_string(boxes.size())+"; limit="+std::to_string(c_.max_obstacles)+"; no obstacle was discarded");return;}
     const double input_stamp=history_.back().first;
-    auto solution=solve(ego,steering_,ref,boxes,c_,previous_);
+    auto solution=solve(ego,steering_,ref,boxes,c_,previous_,startup_);
     std::string reason;
-    if(!solution.success){stop(solution.reason);return;}
+    if(!solution.success){stop(solution.reason+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; pairs="+std::to_string(solution.collision_pairs));return;}
     if(now().seconds()-map_stamp_>timeout_ || now().seconds()-input_stamp>timeout_ || age(pose_received_)>timeout_ || age(diag_received_)>timeout_){stop("inputs expired during optimization");return;}
     if(!validatePath(grid,solution.states,c_,reason)){stop(reason);return;}
     f110_msgs::msg::WpntArray msg;msg.header.frame_id=frame_;
@@ -145,11 +150,12 @@ class Planner : public rclcpp::Node {
       f110_msgs::msg::Wpnt w;w.id=static_cast<int>(i);w.s_m=s;w.x_m=p.x;w.y_m=p.y;w.psi_rad=p.yaw;w.vx_mps=p.v;w.ax_mps2=p.acceleration;w.kappa_radpm=std::tan(p.steering)/c_.wheelbase;msg.wpnts.push_back(w);
       geometry_msgs::msg::PoseStamped ps;ps.header=msg.header;ps.pose=poseMessage(p);path.poses.push_back(ps);}
     path_pub_->publish(msg);visual_pub_->publish(path);previous_=solution.states;
-    status("valid; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size()));
+    status(std::string("valid; mode=")+(startup_?"startup_straight":"obca")+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size())+"; pairs="+std::to_string(solution.collision_pairs));
   }
   Config c_;LocalMap map_;tf2_ros::Buffer buffer_;tf2_ros::TransformListener listener_;
   std::string frame_,base_,scan_convention_,quality_reason_;double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
   int max_queue_{};bool no_return_free_{},armed_{false},awaiting_pose_{true},healthy_{false};
+  double startup_straight_distance_{};bool startup_{false};
   double reset_{},map_stamp_{},diag_stamp_{},last_clock_{},steering_{};Pose initial_;
   Steady::time_point pose_received_{},diag_received_{},map_received_{};
   std::deque<std::pair<double,Pose>> history_;std::deque<sensor_msgs::msg::LaserScan::ConstSharedPtr> scans_;std::vector<State>previous_;
