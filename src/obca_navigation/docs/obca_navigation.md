@@ -162,7 +162,8 @@ ros2 launch obca_navigation navigation_sim.launch.py
 - `waiting for ICP diagnostics`: 초기화 이후 정합 진단이 아직 수신되지 않음.
 - `stale ICP diagnostics` / `stale ICP pose`: 수신 경과시간과 stamp 나이를 초 단위로 확인.
 - `ICP quality`: 수렴 여부, 정합률과 최소값, 잔차와 최대값, dead reckoning 및 거부 여부를 확인.
-- `obstacle budget exceeded`: 장애물 사각형 수가 설정 한도를 초과함.
+- `reference missing`: 관측된 공간에서 연결된 reference를 찾지 못함. 출발점의 원형 여유 공간 검사가 후방 사각지대에 걸리면, 차량의 실제 swept footprint로 검증한 짧은 직진 연결 구간을 통해 탐색을 다시 시도합니다. 미관측 셀을 자유 공간으로 바꾸지는 않습니다.
+- `obstacle budget exceeded`: 장애물 사각형 수가 설정 한도를 초과함. 현재 개수와 한도를 함께 표시합니다.
 - `Ipopt status=...`: 비수렴·불가능한 문제·계산시간 초과.
 - `swept footprint reaches ...`: 장애물 또는 미관측 영역에 차체가 닿음.
 

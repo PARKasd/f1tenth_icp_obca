@@ -39,13 +39,16 @@ int main()try {
   check(validatePath(detour_grid,detour.states,c,reason),"detour failed independent collision validation");
   auto blocked=solve(ego,0,ref,{{-0.2,-0.3,0.5,0.3}},c);
   check(!blocked.success && blocked.states.empty(),"infeasible initial collision accepted");
-  std::vector<Box> excess(c.max_obstacles+1);check(!solve(ego,0,ref,excess,c).success,"obstacle overflow silently truncated");
+  std::vector<Box> excess(c.max_obstacles+1);const auto overflow=solve(ego,0,ref,excess,c);
+  check(!overflow.success && overflow.reason.find("obstacle budget exceeded: count=")==0,"obstacle overflow silently truncated or misreported");
+  check(solve(ego,0,{}, {},c).reason.find("reference missing:")==0,"missing reference misreported as obstacle overflow");
   Config deadline=c;deadline.solve_seconds=1e-9;check(!solve(ego,0,ref,walls,deadline).success,"deadline ignored");
   auto unknown=grid();std::fill(unknown.cells.begin(),unknown.cells.end(),-1);
   check(reference(unknown,ego,c).empty(),"unknown grid planned through");
   check(!validatePath(unknown,solved.states,c,reason),"unknown swept path accepted");
   unknown.has_known_body=true;unknown.known_body=ego;
   check(unknown.footprint(ego,c),"exact physical body is not recognized in blind spot");
+  check(reference(unknown,ego,c).empty(),"bootstrap connector entered unknown space");
   Pose outside=ego;outside.y=0.02;
   check(!unknown.footprint(outside,c),"self-footprint exemption leaked into unknown space");
   LocalMap map(c);map.ray(0,0,2,0,1);map.hit(2,0,1);
@@ -80,6 +83,27 @@ int main()try {
   if(!scan_valid){std::cerr<<reason<<" reference end "<<lidar_ref.back().x<<","<<lidar_ref.back().y<<'\n';
     for(int i=0;i<4;++i)std::cerr<<i<<": "<<lidar_path.states[i].x<<","<<lidar_path.states[i].y<<","<<lidar_path.states[i].yaw<<'\n';}
   check(scan_valid,"scan-derived swept path invalid");
+  // The same observed corridor must bootstrap away from a grid-aligned origin too.
+  for(int heading=0;heading<24;++heading) {
+    Pose start{0.037,-0.023,heading*std::acos(-1.0)/12,0};
+    auto world=[&](double x,double y){return Pose{start.x+std::cos(start.yaw)*x-std::sin(start.yaw)*y,
+      start.y+std::sin(start.yaw)*x+std::cos(start.yaw)*y,0,0};};
+    LocalMap rotated(c);std::vector<Pose> endpoints;const auto sensor=world(0.27,0);
+    for(int beam=0;beam<=1080;++beam) {
+      const double a=(-135.0+beam*0.25)*std::acos(-1.0)/180,dx=std::cos(a),dy=std::sin(a);
+      double range=6;
+      if(std::abs(dy)>1e-9)range=std::min(range,0.8/std::abs(dy));
+      if(dx>1e-9)range=std::min(range,(4-0.27)/dx);
+      const auto hit=world(0.27+range*dx,range*dy);
+      rotated.ray(sensor.x,sensor.y,hit.x,hit.y,1);endpoints.push_back(hit);
+    }
+    for(const auto&p:endpoints)rotated.hit(p.x,p.y,1);
+    rotated.ownFootprint(start,1);const auto observed_grid=rotated.snapshot(start,1);
+    check(observed_grid.footprint(start,c),"rotated scan cannot bootstrap footprint");
+    const auto route=reference(observed_grid,start,c);
+    if(route.size()<2)std::cerr<<"missing rotated reference at heading "<<heading<<'\n';
+    check(route.size()>2,"rotated scan cannot bootstrap reference");
+  }
   // Receding-horizon execution around a left corner, with perfect model actuation.
   // This tests repeated replanning/warm starts, not the ROS tracker or physical vehicle.
   auto corner_grid=grid();

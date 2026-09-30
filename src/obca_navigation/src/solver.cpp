@@ -141,7 +141,9 @@ double derivativeError() {
 Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,const std::vector<Box> &boxes,const Config &c,const std::vector<State> &warm) {
   Solution result; const auto started=Clock::now();
   c.validate();
-  if(ref.size()<2 || boxes.size()>static_cast<std::size_t>(c.max_obstacles)) {result.reason="reference missing or obstacle budget exceeded";return result;}
+  if(ref.size()<2) {result.reason="reference missing: no connected route in observed free space";return result;}
+  if(boxes.size()>static_cast<std::size_t>(c.max_obstacles)) {result.reason="obstacle budget exceeded: count="+
+    std::to_string(boxes.size())+"; limit="+std::to_string(c.max_obstacles);return result;}
   if(!std::isfinite(ego.x+ego.y+ego.yaw+ego.v+steering) || ego.v<0 || ego.v>c.max_speed+c.validation_tolerance || std::abs(steering)>c.max_steering) {result.reason="initial state outside configured limits";return result;}
   Problem p{c,ego,steering,boxes,sampleTargets(ref,ego,c),{},{},{},{},started};
   const int n=p.variables(),m=p.constraints();

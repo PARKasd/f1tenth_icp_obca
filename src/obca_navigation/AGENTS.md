@@ -25,3 +25,5 @@
   bridge publishes /clock and stamps sensors/TF in that same clock domain.
 - Planner stop statuses distinguish clock mismatch, stale pose/diagnostics, and ICP quality
   with measured values. Preserve both arrival-time watchdogs and diagnostic quality checks.
+- If circular reference clearance blocks bootstrap at a LiDAR blind spot, a forward connector
+  may seed the search only after swept-footprint validation. Never mark unknown cells free.

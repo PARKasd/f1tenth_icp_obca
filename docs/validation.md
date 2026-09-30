@@ -1,5 +1,14 @@
 # 검증 기록
 
+## 원격 ROS 2 Jazzy / gym 확인 (2026-10-01)
+
+- 실행 중인 gym에서 기존 `reference missing or obstacle budget exceeded`를 재현했습니다. ICP 정합률 1.0, 수렴 true, 잔차 약 0.060으로 위치추정은 정상이었습니다.
+- 격자 원점에서 벗어난 270도 LiDAR 스캔으로 reference 초기화 실패를 재현했습니다. 검증된 짧은 직진 연결 구간으로 탐색을 재시도하도록 수정한 후 24개 방향의 회귀 검사가 통과했습니다.
+- 원격 Ubuntu에서 `cb --packages-select obca_navigation --cmake-args -DCMAKE_BUILD_TYPE=Release` 빌드 및 `colcon test --packages-select obca_navigation`의 C++ 코어·launch 검사가 통과했습니다.
+- 같은 시뮬 위치에서 수정 후 reference 생성은 통과했습니다. 캡처 지도에서 reference 21점, 장애물 24개로 장애물 한도 64개 이내였습니다.
+- **주행 성공은 확인하지 못했습니다.** 실제 지도 재생에서 최적화는 약 450 ms로 기본 150 ms 제한을 초과했습니다. 진단 목적으로만 제한을 늘려 얻은 해도 step 2에서 미관측 영역에 차량 swept footprint가 걸려 거부됐습니다. 출발 직후 조향에 따른 후방 사각지대 제약과 계산시간 개선이 남아 있습니다.
+- 원격 진단에서는 출력을 `/obca/debug_drive`로 분리했고 종료 후 진단용 navigation을 정리했습니다. 운영 timeout·미관측 영역 충돌 검사는 완화하지 않았습니다.
+
 ## 2026-10-01 시뮬 시간 설정 수정
 
 - 일반 gym bridge에 맞춰 시뮬 기본 `use_sim_time=false`로 수정했습니다.

@@ -125,10 +125,12 @@ class Planner : public rclcpp::Node {
     gm.info.origin.position.x=grid.x0;gm.info.origin.position.y=grid.y0;gm.info.origin.orientation.w=1;gm.data.assign(grid.cells.begin(),grid.cells.end());grid_pub_->publish(gm);
     if(!grid.footprint(ego,c_)){stop("vehicle footprint not in observed free space");return;}
     const auto ref=reference(grid,ego,c_,previous_);
+    if(ref.size()<2){stop("reference missing: no connected route in observed free space");return;}
     const double reach=c_.max_speed*c_.horizon*c_.dt+std::hypot(std::max(c_.front,c_.rear),c_.half_width)+
       std::sqrt(2.0)*(c_.margin+c_.validation_step)+c_.validation_tolerance;
     const auto boxes=obstacles(grid,ego,reach);
-    if(boxes.size()>static_cast<std::size_t>(c_.max_obstacles)){stop("obstacle budget exceeded: no obstacle was discarded");return;}
+    if(boxes.size()>static_cast<std::size_t>(c_.max_obstacles)){stop("obstacle budget exceeded: count="+
+      std::to_string(boxes.size())+"; limit="+std::to_string(c_.max_obstacles)+"; no obstacle was discarded");return;}
     const double input_stamp=history_.back().first;
     auto solution=solve(ego,steering_,ref,boxes,c_,previous_);
     std::string reason;

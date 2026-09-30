@@ -157,7 +157,7 @@ Grid LocalMap::snapshot(const Pose &p,double t) {
   }
   return g;
 }
-std::vector<Pose> reference(const Grid &g,const Pose &ego,const Config &c,const std::vector<State> &previous) {
+static std::vector<Pose> referenceSearch(const Grid &g,const Pose &ego,const Config &c,const std::vector<State> &previous) {
   const int start=g.index(ego.x,ego.y);
   if(start<0 || g.cells[start]!=0) return {};
   std::vector<double> costs(g.cells.size(),std::numeric_limits<double>::infinity());
@@ -217,6 +217,30 @@ std::vector<Pose> reference(const Grid &g,const Pose &ego,const Config &c,const 
   for(std::size_t i=0;i+1<path.size();++i) path[i].yaw=std::atan2(path[i+1].y-path[i].y,path[i+1].x-path[i].x);
   path.back().yaw=path[path.size()-2].yaw;
   return path;
+}
+std::vector<Pose> reference(const Grid &g,const Pose &ego,const Config &c,const std::vector<State> &previous) {
+  auto path=referenceSearch(g,ego,c,previous);
+  if(!path.empty() || !g.footprint(ego,c))return path;
+  // Circular search clearance can touch the rear blind spot even though the actual
+  // rectangle can move forward. Connect to the lattice only through verified free
+  // swept body space; do not fill unknown cells or relax the collision validator.
+  const double limit=std::min(c.reference_distance-c.reference_clearance,
+    c.reference_clearance+std::max(c.front,c.rear)+g.resolution);
+  for(double advance=g.resolution;advance<=limit;advance+=g.resolution) {
+    Pose seed=ego;seed.x+=advance*std::cos(ego.yaw);seed.y+=advance*std::sin(ego.yaw);
+    std::vector<State> connector(c.horizon+1);
+    for(int i=0;i<=c.horizon;++i) {
+      const double fraction=static_cast<double>(i)/c.horizon;
+      connector[i].x=ego.x+fraction*(seed.x-ego.x);
+      connector[i].y=ego.y+fraction*(seed.y-ego.y);connector[i].yaw=ego.yaw;
+    }
+    std::string reason;
+    if(!validatePath(g,connector,c,reason))break;
+    Config remaining=c;remaining.reference_distance-=advance;
+    path=referenceSearch(g,seed,remaining,previous);
+    if(!path.empty()){path.insert(path.begin(),ego);return path;}
+  }
+  return {};
 }
 std::vector<Box> obstacles(const Grid &g,const Pose &ego,double reach) {
   // Merge only adjacent occupied cells, never merge across a known-free gap.
