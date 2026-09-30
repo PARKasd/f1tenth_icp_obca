@@ -99,7 +99,11 @@ unknown 공간은 현재 구현에서 최적화 후의 전체 footprint 검사�
 
 ## 5. 주요 설정
 
-파일: `config/navigation.yaml`. launch의 `params_file`로 다른 YAML을 선택할 수 있습니다.
+파일: `config/navigation.yaml`. launch의 `params_file`로 다른 공통 YAML을 선택할 수 있습니다.
+실차용 `navigation_real.launch.py`는 `config/real.yaml`, 시뮬용 `navigation_sim.launch.py`는
+`config/sim.yaml`을 공통 YAML 다음에 적용합니다. 마지막으로 명시한 CLI 인자가 덮어씁니다.
+CLI 인자를 생략하면 YAML 값을 유지합니다. 공통 launch만 실행하면 환경별 파일 없이
+`/obca/drive`로 명령을 발행합니다.
 ICP 전체 기본값은 `kinematic_localization/config/kinematic_localization.yaml`을 먼저 읽고
 navigation YAML과 launch 선택값으로 덮어씁니다.
 
@@ -129,24 +133,26 @@ Ipopt 중간 콜백은 반복 사이에만 시간을 확인하므로 hard real-t
 1. 저장소 루트에서 README의 의존성 설치·빌드를 수행합니다. 이전 저장소 상위 폴더에서
    colcon을 실행하면 중복 패키지를 찾을 수 있으므로 새 저장소 안에서 빌드하십시오.
 2. 센서 또는 gym을 실행합니다. `base_frame → LiDAR frame` TF가 있어야 합니다.
-3. `ros2 launch obca_navigation navigation.launch.py`를 실행합니다.
+3. 실차는 `ros2 launch obca_navigation navigation_real.launch.py`, 시뮬은
+   `ros2 launch obca_navigation navigation_sim.launch.py`를 실행합니다.
 4. RViz의 2D Pose Estimate 또는 `/initialpose` 1회 발행으로 시작합니다. frame은 `map`입니다.
-5. `/obca/status`, `/obca/local_grid`, `/obca/path`, `/obca/drive`를 확인합니다.
+5. `/obca/status`, `/obca/local_grid`, `/obca/path`와 해당 환경의 제어 토픽을 확인합니다.
+   실차는 `/drive_autonomous`, 시뮬은 `/drive`입니다. 관찰용 출력으로 바꾸려면
+   `drive_topic:=/obca/drive`를 추가합니다.
 6. 시뮬에서 명령을 연결하려면 아래 예시를 사용합니다.
 
 ```zsh
 source /opt/ros/jazzy/setup.zsh
 source install/setup.zsh
-ros2 launch obca_navigation navigation.launch.py \
-  use_sim_time:=true wheel_odom_topic:=/ego_racecar/odom \
-  base_frame:=ego_racecar/base_link odom_frame:=ego_racecar/odom \
-  publish_map_odom_tf:=false drive_topic:=/drive
+ros2 launch obca_navigation navigation_sim.launch.py
 ```
 
 시뮬 프레임 이름은 실제 bridge 설정과 일치시켜야 합니다. gym이 이미 map 기반 TF를
-발행하는 경우 중복 부모를 만들지 않도록 이 예시는 ICP의 map→odom 발행을 끕니다.
-실차에서는 `/drive` 대신 실제 mux의 자율 입력 토픽을 지정하십시오. 센서 드라이버·mux는
-이 저장소에 포함하지 않습니다.
+발행하는 경우 중복 부모를 만들지 않도록 시뮬 프로필은 ICP의 map→odom 발행을 끕니다.
+시뮬 기본값은 `use_sim_time=true`이므로 `/clock`이 필요합니다. `/clock`이 없는 gym은
+`use_sim_time:=false`로 실행합니다. 실차는 map→odom TF를 발행하며 기존 mux의
+`/drive_autonomous`를 사용합니다. 다른 mux 구성에서는 `drive_topic`을 변경하십시오.
+센서 드라이버·mux·gym은 이 저장소의 launch에 포함하지 않습니다.
 
 ## 7. 정지 이유와 한계
 

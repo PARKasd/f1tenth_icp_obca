@@ -14,7 +14,7 @@ ROS 2 Jazzy / C++17 기반 지도 없는 저속 주행 프로토타입입니다.
 - OBCA는 직사각형 차체와 장애물의 쌍대 거리 제약을 Ipopt로 풉니다.
 - 초기 위치 지정 전, 최적화 실패, 미관측 영역 침범, 입력 지연 시 정지 명령을 발행합니다.
 - 초기 설정 최고 속도는 0.8 m/s입니다. 실차 제동·추종 성능이 검증된 값은 아닙니다.
-- 기본 명령 토픽은 `/obca/drive`입니다. 시뮬에서 주행하려면 `drive_topic:=/drive`를 지정합니다.
+- 공통 launch는 `/obca/drive`, 실차용은 `/drive_autonomous`, 시뮬용은 `/drive`로 명령을 발행합니다.
 - 기존 주행 스택과 동시에 `/drive`를 발행하지 마십시오.
 
 ## 1. 설치·빌드
@@ -36,20 +36,33 @@ colcon test-result --verbose
 
 ## 2. 실행
 
-센서·휠 odometry·센서 외부변환 TF를 먼저 실행합니다. 외부 시뮬레이터는 이 저장소에 포함하지 않습니다.
+실차에서는 센서·휠 odometry·TF·차량 mux를 먼저 실행합니다. 시뮬에서는 gym bridge를 먼저
+실행합니다. 아래 launch들은 ICP·OBCA·추종기 3개를 시작하며 드라이버·mux·gym은 포함하지 않습니다.
+
+| 실행 파일 | 설정 파일 | 시간 | 휠 odometry | 제어 출력 |
+|---|---|---|---|---|
+| `navigation_real.launch.py` | `config/real.yaml` | 실제 시간 | `/odom` | `/drive_autonomous` |
+| `navigation_sim.launch.py` | `config/sim.yaml` | `/clock` | `/ego_racecar/odom` | `/drive` |
+| `navigation.launch.py` | 공통 설정만 | 실제 시간 | `/odom` | `/obca/drive` |
 
 ```zsh
-# 실차 인터페이스의 출력을 먼저 관찰: 명령은 /obca/drive에만 발행
-ros2 launch obca_navigation navigation.launch.py
+# 실차: 기존 f1tenth_stack 자율 mux 입력으로 전달
+ros2 launch obca_navigation navigation_real.launch.py
 
-# 표준 gym 토픽/프레임 예시: 실제 시뮬 설정에 맞게 수정
-ros2 launch obca_navigation navigation.launch.py \
-  use_sim_time:=true wheel_odom_topic:=/ego_racecar/odom \
-  base_frame:=ego_racecar/base_link odom_frame:=ego_racecar/odom \
-  publish_map_odom_tf:=false drive_topic:=/drive
+# 시뮬: ego_racecar 프레임과 /drive 사용
+ros2 launch obca_navigation navigation_sim.launch.py
+
+# 명령 출력만 확인하려면 출력 토픽을 덮어쓸 수 있음
+ros2 launch obca_navigation navigation_real.launch.py drive_topic:=/obca/drive
 ```
 
-두 명령 중 환경에 맞는 하나만 실행합니다. 다른 터미널에서 초기 위치를 지정합니다.
+환경에 맞는 명령 하나만 실행합니다. 시뮬용 기본값은 `base_frame=ego_racecar/base_link`,
+`odom_frame=ego_racecar/odom`, `publish_map_odom_tf=false`입니다. `/clock`을 발행하지 않는
+gym 버전에서는 `use_sim_time:=false`를 추가하십시오. 실제 프레임·토픽 이름이 다르면
+`base_frame`, `odom_frame`, `wheel_odom_topic`, `scan_topic`, `drive_topic` 인자로 변경합니다.
+명령행 인자는 공통 YAML과 환경별 YAML보다 우선합니다.
+
+다른 터미널에서 초기 위치를 지정합니다. 세 launch 모두 초기 위치 지정 전에는 주행하지 않습니다.
 
 ```zsh
 ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \

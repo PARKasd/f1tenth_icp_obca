@@ -7,9 +7,16 @@
   Outputs: f110_msgs/WpntArray, nav_msgs/Path, nav_msgs/OccupancyGrid, std_msgs/String,
   ackermann_msgs/AckermannDriveStamped. No custom messages.
 - All operating parameters are in config/navigation.yaml, loaded by launch/navigation.launch.py.
+  navigation_real.launch.py and navigation_sim.launch.py include this common launch and load
+  config/real.yaml and config/sim.yaml respectively. Explicit CLI overrides win over YAML profiles.
+  Hardware commands go to /drive_autonomous (external mux), gym commands to /drive. Common launch
+  alone retains /obca/drive. These launches do not start drivers, mux, or the external simulator.
   CMake installs executables, config, launch, and docs. Korean instructions: docs/obca_navigation.md.
 - Unknown/expired cells block motion. Validate swept vehicle footprint and the NLP residuals
   independently before publishing. Obstacle-budget overflow means stop, never dropping obstacles.
 - Manual initial pose resets map, prior path, and tracker. Reject data predating the reset.
 - The tracker is a separate process with its own wall timer and data watchdog; a blocked solver
-  cannot keep stale drive commands alive. Default launch emits commands on /obca/drive only.
+  cannot keep stale drive commands alive. The common launch emits commands on /obca/drive;
+  environment-specific launches use the hardware mux or simulator topic described above.
+- test/test_launch_profiles.py checks launch wiring and parameter precedence with lightweight
+  launch API doubles. Passing it does not establish ROS runtime compatibility.

@@ -1,0 +1,16 @@
+/**:
+  ros__parameters:
+    # Requires the simulator to publish /clock. Override use_sim_time:=false otherwise.
+    use_sim_time: true
+    map_frame: map
+    base_frame: ego_racecar/base_link
+    scan_topic: /scan
+    drive_topic: /drive
+kinematic_localization:
+  ros__parameters:
+    lidar_topic: /scan
+    odom_topic: /ego_racecar/odom
+    odom_frame: ego_racecar/odom
+    # Gym already owns the ground-truth vehicle TF tree.
+    publish_map_odom_tf: false
+    map_output_file: sim_slam_map.kissmap

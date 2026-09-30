@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    use_sim_time: false
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan
+    # Existing f1tenth_stack autonomous mux input. Do not bypass the hardware mux.
+    drive_topic: /drive_autonomous
+kinematic_localization:
+  ros__parameters:
+    lidar_topic: /scan
+    odom_topic: /odom
+    odom_frame: odom
+    publish_map_odom_tf: true
+    map_output_file: real_slam_map.kissmap

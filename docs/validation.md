@@ -1,5 +1,24 @@
 # 검증 기록
 
+## 2026-10-01 환경별 launch 추가 검증
+
+`navigation_real.launch.py`, `navigation_sim.launch.py`와 각 YAML 프로필을 추가했습니다.
+Python 3.11.9와 PyYAML 6.0.3으로 launch 배선·파라미터 적용 순서를 검사한 7개 테스트가
+모두 통과했습니다. 검사 대상은 Python/YAML 문법, 환경별 파일 선택, 실차·시뮬의
+시간·프레임·출력 토픽, 공통 launch의 관찰용 출력 유지, CLI 덮어쓰기, 누락 파일과
+잘못된 boolean의 실패 처리입니다.
+
+이 테스트는 ROS launch 클래스의 가벼운 대역을 사용해 실제 launch 함수와 YAML을
+평가합니다. 실제 ROS 노드 기동·DDS·TF·차량 주행 검증을 대신하지 않습니다.
+ROS 테스트 환경에서는 `colcon test --packages-select obca_navigation`에 함께 등록됩니다.
+ROS 없이 실행하려면 PyYAML 설치 후 다음 명령을 사용합니다.
+
+```bash
+python3 src/obca_navigation/test/test_launch_profiles.py -v
+```
+
+이번 변경은 launch·설정·문서에 한정되며 아래 C++ core 결과는 이전 구현 검증 기록입니다.
+
 ## 1. 실제 수행한 검증
 
 Windows x64에서 임시 도구를 사용했습니다. 도구는 저장소에 포함하지 않았습니다.
