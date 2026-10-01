@@ -11,6 +11,7 @@ struct Pose { double x{}, y{}, yaw{}, v{}; };
 struct Box { double xmin{}, ymin{}, xmax{}, ymax{}; };
 struct State : Pose { double steering{}, acceleration{}; };
 struct Config {
+  bool retain_observations{false};
   int horizon{16}, max_obstacles{64}, max_iterations{120};
   double dt{0.2}, wheelbase{0.3302}, front{0.38}, rear{0.14}, half_width{0.16};
   double margin{0.06}, max_speed{0.8}, max_steering{0.41}, max_steering_rate{1.0};

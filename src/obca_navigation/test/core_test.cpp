@@ -176,6 +176,55 @@ int main()try {
   check(observed.cells[observed.index(2,0)]==100,"ray endpoint missing");
   observed=map.snapshot(ego,1+c.map_ttl+0.01);check(observed.cells[observed.index(1,0)]==-1,"expired free space retained");
   map.hit(1,0,10);map.clear();observed=map.snapshot(ego,10);check(observed.cells[observed.index(1,0)]==-1,"reset retained old map");
+  Config memory_config=c;memory_config.retain_observations=true;
+  LocalMap memory(memory_config);
+  memory.ray(0,0,2,0,1);memory.hit(2,0,1);
+  auto remembered=memory.snapshot(ego,20);
+  check(remembered.cells[remembered.index(1,0)]==0,"SLAM free observation expired in blind spot");
+  check(remembered.cells[remembered.index(2,0)]==100,"SLAM occupied observation expired");
+  check(remembered.cells[remembered.index(1,1)]==-1,"SLAM memory invents unobserved free space");
+  memory.hit(1,0,21);remembered=memory.snapshot(ego,21);
+  check(remembered.cells[remembered.index(1,0)]==100,"new obstacle ignored by SLAM memory");
+  memory.ray(0,0,2,0,22);memory.hit(2,0,22);remembered=memory.snapshot(ego,22);
+  check(remembered.cells[remembered.index(1,0)]==0,"new free observation ignored by SLAM memory");
+  memory.snapshot(Pose{20,0,0,0},23);remembered=memory.snapshot(ego,24);
+  check(remembered.cells[remembered.index(1,0)]==-1,"SLAM memory exceeds local radius bound");
+  memory.ray(0,0,2,0,25);memory.clear();remembered=memory.snapshot(ego,26);
+  check(remembered.cells[remembered.index(1,0)]==-1,"manual reset retains SLAM observations");
+  memory.ray(0,0,2,0,30);remembered=memory.snapshot(ego,29);
+  check(remembered.cells[remembered.index(1,0)]==-1,"SLAM memory retains observations from future clock");
+  // 180-degree forward LiDAR: a scan at an earlier pose observes today's rear.
+  // At rest the current scan cannot refresh it, but SLAM memory must retain it.
+  LocalMap rolling_scan(c),accumulated_scan(memory_config);
+  auto forward_scan=[](LocalMap &target,double x,double stamp) {
+    std::vector<Pose> endpoints;
+    for(int i=0;i<=1080;++i) {
+      const double a=(-90.0+i/6.0)*std::acos(-1.0)/180;
+      const double dx=std::cos(a),dy=std::sin(a),ox=x+0.275;
+      double range=6.0;
+      if(std::abs(dy)>1e-9)range=std::min(range,0.8/std::abs(dy));
+      if(dx>1e-9)range=std::min(range,(4.0-ox)/dx);
+      Pose hit{ox+range*dx,range*dy,0,0};
+      target.ray(ox,0,hit.x,hit.y,stamp);endpoints.push_back(hit);
+    }
+    for(const auto &hit:endpoints)target.hit(hit.x,hit.y,stamp);
+    target.ownFootprint(Pose{x,0,0,0},stamp);
+  };
+  for(auto *target:{&rolling_scan,&accumulated_scan}) {
+    forward_scan(*target,-1.0,1.0);forward_scan(*target,0,10.0);
+  }
+  const auto rolling_grid=rolling_scan.snapshot(ego,10.0);
+  const auto accumulated_grid=accumulated_scan.snapshot(ego,10.0);
+  Pose initial_turn{0.04,0,0.01,0};
+  check(!rolling_grid.footprint(initial_turn,c),"180-degree blind-spot failure not reproduced");
+  check(accumulated_grid.footprint(initial_turn,c),"observed SLAM history does not permit initial turn");
+  check(reference(accumulated_grid,ego,memory_config).size()>2,"observed SLAM history cannot seed local goals");
+  const auto remembered_turn=solveObserved(accumulated_grid,ego,0,turning,
+    obstacles(accumulated_grid,ego,reachableDistance(ego.v,memory_config)+0.7),memory_config);
+  check(remembered_turn.success && validatePath(accumulated_grid,remembered_turn.states,memory_config,reason),
+    "observed SLAM history cannot produce a validated turn");
+  check(remembered_turn.reason.find("recovery=")==std::string::npos,
+    "observed rear still forces straight-only recovery");
   // One-cell wall across the complete map must never be crossed by reference search.
   g=grid();for(int y=0;y<g.height;++y)g.cells[y*g.width+g.index(1,0)%g.width]=100;
   const auto stopped_ref=reference(g,ego,c);for(const auto&p:stopped_ref)check(p.x<1,"reference crosses disconnected wall");

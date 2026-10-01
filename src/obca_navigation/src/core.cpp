@@ -166,7 +166,8 @@ Grid LocalMap::snapshot(const Pose &p,double t) {
   const double r=c_.grid_resolution;
   for(auto it=cells_.begin();it!=cells_.end();) {
     const double dx=(it->first.first+0.5)*r-p.x,dy=(it->first.second+0.5)*r-p.y;
-    if(t<it->second.time || t-it->second.time>c_.map_ttl || std::hypot(dx,dy)>c_.map_radius)
+    if(t<it->second.time || (!c_.retain_observations && t-it->second.time>c_.map_ttl) ||
+       std::hypot(dx,dy)>c_.map_radius)
       it=cells_.erase(it);
     else ++it;
   }

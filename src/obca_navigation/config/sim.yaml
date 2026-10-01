@@ -14,6 +14,8 @@
 obca_planner:
   ros__parameters:
     reference_mode: raceline
+    # 정적 트랙 SLAM: 후방 사각지대에서 이전 관측을 2초 뒤 잃지 않도록 유지.
+    retain_observations: true
     # Local mode: prefer the middle of observed corridors and avoid wall-hugging.
     reference_wall_weight: 1.0
     goal_clearance_weight: 0.5

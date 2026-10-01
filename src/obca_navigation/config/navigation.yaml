@@ -37,6 +37,8 @@
     grid_resolution: 0.1
     map_radius: 6.0
     map_ttl: 2.0
+    # true: ICP 좌표계의 실제 관측을 반경 내에 누적. 센서 watchdog은 별도로 유지.
+    retain_observations: false
     reference_distance: 2.5
     reference_clearance: 0.35
     # Local reference: zero retains distance-only search.

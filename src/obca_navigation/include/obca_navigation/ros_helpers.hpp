@@ -17,7 +17,7 @@ inline Config parameters(rclcpp::Node &node) {
   PARAM(solve_seconds);PARAM(tolerance);PARAM(validation_tolerance);PARAM(position_weight);
   PARAM(heading_weight);PARAM(speed_weight);PARAM(steering_weight);PARAM(acceleration_weight);
   PARAM(smooth_weight);PARAM(grid_resolution);PARAM(map_radius);PARAM(map_ttl);
-  PARAM(reference_distance);PARAM(reference_clearance);PARAM(validation_step);
+  PARAM(reference_distance);PARAM(reference_clearance);PARAM(validation_step);PARAM(retain_observations);
   PARAM(seed_lookahead);PARAM(recovery_stationary_speed);PARAM(reference_wall_weight);PARAM(goal_clearance_weight);
   PARAM(goal_progress_weight);PARAM(goal_route_clearance_weight);PARAM(goal_turn_weight);
   PARAM(goal_continuation_weight);PARAM(goal_clearance_target);PARAM(goal_continuation_distance);

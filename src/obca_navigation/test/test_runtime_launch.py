@@ -146,6 +146,8 @@ class RuntimeLaunch(unittest.TestCase):
                     for name in ('goal_progress_weight', 'goal_route_clearance_weight', 'goal_turn_weight',
                                  'goal_continuation_weight', 'goal_clearance_target', 'goal_continuation_distance'):
                         self.assertEqual(parameter('obca_planner', name).double_value, goals[name])
+                    self.assertEqual(parameter('obca_planner', 'retain_observations').bool_value,
+                                     goals['retain_observations'])
                     if profile == 'sim':
                         profile_params = yaml.safe_load((Path(__file__).parents[1] / 'config' / 'sim.yaml').read_text())
                         for owner, names in [('obca_planner', ('reference_wall_weight', 'goal_clearance_weight',

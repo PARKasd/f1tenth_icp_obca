@@ -79,7 +79,8 @@ class Planner : public rclcpp::Node {
     drive_sub_=create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(declare_parameter<std::string>("drive_topic","/obca/drive"),1,
       [this](ackermann_msgs::msg::AckermannDriveStamped::ConstSharedPtr m){if(std::isfinite(m->drive.steering_angle))steering_=m->drive.steering_angle;});
     timer_=create_wall_timer(std::chrono::duration<double>(period_),[this]{tick();});
-    RCLCPP_INFO(get_logger(),"ICP + OBCA: reference_mode=%s; waiting for /initialpose",reference_mode_.c_str());
+    RCLCPP_INFO(get_logger(),"ICP + OBCA: reference_mode=%s; retain_observations=%s; waiting for /initialpose",
+      reference_mode_.c_str(),c_.retain_observations?"true":"false");
   }
  private:
   std::optional<Pose> at(double t)const {
@@ -126,7 +127,9 @@ class Planner : public rclcpp::Node {
     else sync_reason_="scan has no usable rays";
     return true;
   }
-  void status(const std::string&s){std_msgs::msg::String msg;msg.data=s+goal_summary_+"; reference_mode="+reference_mode_;status_pub_->publish(msg);}
+  void status(const std::string&s){std_msgs::msg::String msg;msg.data=s+goal_summary_+
+    "; map_memory="+(c_.retain_observations?"accumulated":"expiring")+
+    "; reference_mode="+reference_mode_;status_pub_->publish(msg);}
   void stop(const std::string&s){f110_msgs::msg::WpntArray m;m.header.frame_id=frame_;m.header.stamp=now();path_pub_->publish(m);
     nav_msgs::msg::Path p;p.header=m.header;visual_pub_->publish(p);previous_.clear();status(s);}
   void tick() {
