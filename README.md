@@ -85,6 +85,9 @@ ros2 launch obca_navigation navigation_real.launch.py drive_topic:=/obca/drive
 `base_frame`, `odom_frame`, `wheel_odom_topic`, `scan_topic`, `drive_topic` 인자로 변경합니다.
 명령행 인자는 공통 YAML과 환경별 YAML보다 우선합니다.
 
+레이스라인 기준 주행에는 `reference_mode:=local`을 붙이지 마십시오. 이 인자는 지도 없는
+로컬 탐색을 선택합니다. `/obca/status`의 `reference_mode`에서 실제 모드를 확인할 수 있습니다.
+
 다른 터미널에서 초기 위치를 지정합니다. 세 launch 모두 초기 위치 지정 전에는 주행하지 않습니다.
 
 ```zsh

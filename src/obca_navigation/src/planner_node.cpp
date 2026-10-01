@@ -92,15 +92,16 @@ class Planner : public rclcpp::Node {
   }
   bool integrate(const sensor_msgs::msg::LaserScan&m,double now_sec) {
     if(m.ranges.size()<2 || !std::isfinite(m.angle_min+m.angle_increment+m.time_increment+m.range_min+m.range_max) ||
-       m.angle_increment==0 || m.time_increment<0 || m.range_min<0 || m.range_max<=m.range_min)return true;
+       m.angle_increment==0 || m.time_increment<0 || m.range_min<0 || m.range_max<=m.range_min){sync_reason_="invalid scan metadata";return true;}
     const double span=(m.ranges.size()-1)*m.time_increment;
     const double start=rclcpp::Time(m.header.stamp).seconds()-(scan_convention_=="end"?span:0),end=start+span;
-    if(start<reset_ || end<=map_stamp_ || now_sec-end>timeout_)return true;
-    if(history_.empty() || start<history_.front().first)return true;
-    if(end>history_.back().first)return false;
+    if(start<reset_ || end<=map_stamp_ || now_sec-end>timeout_){sync_reason_="expired or already integrated scan";return true;}
+    if(history_.empty() || start<history_.front().first){sync_reason_="scan predates available pose history";return true;}
+    if(end>history_.back().first){sync_reason_="waiting for pose bracket; scan_ahead_sec="+std::to_string(end-history_.back().first);return false;}
     const auto a=at(start),b=at(end);if(!a || !b)return false;
     geometry_msgs::msg::TransformStamped extrinsic;
-    try{extrinsic=buffer_.lookupTransform(base_,m.header.frame_id,tf2::TimePointZero);}catch(const tf2::TransformException&){return false;}
+    try{extrinsic=buffer_.lookupTransform(base_,m.header.frame_id,tf2::TimePointZero);}
+    catch(const tf2::TransformException&){sync_reason_="missing sensor TF: "+base_+" <- "+m.header.frame_id;return false;}
     geometry_msgs::msg::Pose ep;ep.position.x=extrinsic.transform.translation.x;ep.position.y=extrinsic.transform.translation.y;ep.orientation=extrinsic.transform.rotation;
     Pose sensor;if(!poseFrom(ep,sensor))return true;
     std::vector<Pose> endpoints;std::size_t usable=0;
@@ -120,10 +121,11 @@ class Planner : public rclcpp::Node {
     }
     // Apply all endpoints after free rays, so a neighbouring beam cannot erase a hit in this scan.
     for(const auto&p:endpoints)map_.hit(p.x,p.y,end);
-    if(usable){map_.ownFootprint(*b,end);map_stamp_=end;map_received_=Steady::now();}
+    if(usable){map_.ownFootprint(*b,end);map_stamp_=end;map_received_=Steady::now();sync_reason_="synchronized";}
+    else sync_reason_="scan has no usable rays";
     return true;
   }
-  void status(const std::string&s){std_msgs::msg::String msg;msg.data=s;status_pub_->publish(msg);}
+  void status(const std::string&s){std_msgs::msg::String msg;msg.data=s+"; reference_mode="+reference_mode_;status_pub_->publish(msg);}
   void stop(const std::string&s){f110_msgs::msg::WpntArray m;m.header.frame_id=frame_;m.header.stamp=now();path_pub_->publish(m);
     nav_msgs::msg::Path p;p.header=m.header;visual_pub_->publish(p);previous_.clear();status(s);}
   void tick() {
@@ -139,8 +141,19 @@ class Planner : public rclcpp::Node {
     if(age(pose_received_)>timeout_ || t-history_.back().first>timeout_){
       stop("stale ICP pose: receipt_age="+std::to_string(age(pose_received_))+"; stamp_age="+std::to_string(t-history_.back().first));return;}
     if(!healthy_){stop(quality_reason_);return;}
-    while(!scans_.empty()){if(!integrate(*scans_.front(),t))break;scans_.pop_front();}
-    if(map_stamp_<=0 || t-map_stamp_>timeout_ || age(map_received_)>timeout_){stop("waiting for fresh synchronized scan/TF");return;}
+    // At high sensor rates, mapping every queued scan blocks the executor and
+    // expires the pose/TF needed for the next scan. Use the newest bracketed scan
+    // once per planning tick; unobserved space remains unknown, never filled in.
+    const auto mapping_started=Steady::now();
+    for(std::size_t i=scans_.size();i>0;--i){const double before=map_stamp_;
+      if(!integrate(*scans_[i-1],t))continue;
+      if(map_stamp_>before){scans_.erase(scans_.begin(),scans_.begin()+i);break;}
+      scans_.erase(scans_.begin()+i-1);
+    }
+    const double mapping_ms=std::chrono::duration<double,std::milli>(Steady::now()-mapping_started).count();
+    if(map_stamp_<=0 || t-map_stamp_>timeout_ || age(map_received_)>timeout_){
+      stop("waiting for fresh synchronized scan/TF; reason="+sync_reason_+
+        "; map_age="+std::to_string(map_stamp_>0?t-map_stamp_:-1)+"; queued="+std::to_string(scans_.size()));return;}
     const Pose ego=history_.back().second;
     Grid grid=map_.snapshot(ego,t);
     nav_msgs::msg::OccupancyGrid gm;gm.header.frame_id=frame_;gm.header.stamp=now();gm.info.resolution=grid.resolution;gm.info.width=grid.width;gm.info.height=grid.height;
@@ -177,10 +190,10 @@ class Planner : public rclcpp::Node {
       geometry_msgs::msg::PoseStamped ps;ps.header=msg.header;ps.pose=poseMessage(p);path.poses.push_back(ps);}
     path_pub_->publish(msg);visual_pub_->publish(path);previous_=solution.states;
     status(std::string("valid; mode=")+(startup_?"startup_straight":"obca")+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size())+"; pairs="+std::to_string(solution.collision_pairs)+
-      (raceline_?"; raceline_s="+std::to_string(raceline_->progress())+"; lap_length="+std::to_string(raceline_->length()):""));
+      "; mapping_ms="+std::to_string(mapping_ms)+(raceline_?"; raceline_s="+std::to_string(raceline_->progress())+"; lap_length="+std::to_string(raceline_->length()):""));
   }
   Config c_;LocalMap map_;tf2_ros::Buffer buffer_;tf2_ros::TransformListener listener_;
-  std::string frame_,base_,scan_convention_,quality_reason_;double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
+  std::string frame_,base_,scan_convention_,quality_reason_,sync_reason_{"no scan received"};double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
   int max_queue_{};bool no_return_free_{},armed_{false},awaiting_pose_{true},healthy_{false};
   double startup_straight_distance_{};bool startup_{false};
   std::string reference_mode_;std::optional<Raceline>raceline_;

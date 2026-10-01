@@ -25,6 +25,8 @@ Jazzy / Ubuntu 24.04는 `main` 브랜치를 사용합니다. 배포판 전환 �
 4. 계획기는 스캔 시작·끝을 둘러싸는 위치 샘플이 확보될 때까지 기다립니다. 두 위치 사이를
    보간하고 `base_frame → scan.frame_id` 외부변환으로 각 레이의 원점·방향을 계산합니다.
    저속 평면 운동을 가정하며 이 보간이 실제 운동을 완벽히 복원하는 것은 아닙니다.
+   높은 센서 발행률에서 큐 전체를 처리하다 입력이 만료되지 않도록, 매 계획 주기에는
+   위치 기록과 동기화된 가장 최신 스캔 한 개만 반영합니다. 처리하지 않은 관측을 free로 추정하지 않습니다.
 5. 레이가 지나간 셀을 free, 유효한 반사 끝점을 occupied로 기록합니다. 모든 free ray를
    처리한 뒤 끝점을 기록해 같은 스캔에서 이웃 레이가 장애물을 지우지 않도록 합니다.
    NaN은 무시합니다. +inf/range_max는 기본적으로 free 증거가 아닙니다.
@@ -42,6 +44,9 @@ Jazzy / Ubuntu 24.04는 `main` 브랜치를 사용합니다. 배포판 전환 �
    속도 프로파일은 차량 상한·감속 한계와 함께 적용합니다. 레이스라인이 새 장애물과 겹쳐도
    목표 자체를 삭제하지 않고 OBCA가 우회하도록 합니다. 지도에서 생성한 레이스라인은
    현재 공간이 안전하다는 증거가 아니며, 최종 경로는 관측된 공간 안에 있어야 합니다.
+   이전 해가 없으면 기준선 방향의 제한된 조향과 감속으로 bicycle model 초기 궤적을 만듭니다.
+   격자 코너 위에 상태를 놓고 조향만 0으로 시작하던 초기값의 비일관성을 줄입니다.
+   이 초기 궤적은 직접 발행하지 않으며 동일한 최적화·충돌 검사 후에만 경로를 발행합니다.
 9. 해 상태, 시간 제한, 모든 변수·제약 잔차, 연속 구간의 차량 swept footprint를 검사합니다.
    검사에 실패하면 빈 `WpntArray`를 발행하며 추종기는 정지합니다.
 10. 성공한 경로를 별도 추종 프로세스가 따라갑니다. 최적화가 오래 걸려도 추종기의
@@ -137,6 +142,7 @@ source voxel 0.1 m, 수렴 임계값 0.0001을 사용하고 차체 roll 보정�
 | `raceline_max_error/raceline_max_heading_error` | 1.0 m / 1.2 rad | 초기화 및 추종 투영 허용 오차 |
 | `raceline_forward_window/raceline_backward_window` | 2.0 / 0.3 m | 이전 진행 거리 주변의 탐색 범위, 각각 반 랩 미만 |
 | `front/rear/half_width` | 0.38 / 0.14 / 0.16 m | base_frame 기준 차체 형상, 실제 장착 기준점 확인 필요 |
+| `margin` | 0.12 m | 운영 YAML의 차체 추가 여유; 미래 OBCA 거리 제약은 약 0.227 m |
 | `wheelbase` | 0.3302 m | bicycle model 축간거리 |
 | `max_speed` | 0.8 m/s | 저속 프로토타입 상한 |
 | `max_accel/max_decel` | 1.0 / 1.5 m/s² | 계획 한계, 실제 제동 성능 확인 필요 |
@@ -145,8 +151,9 @@ source voxel 0.1 m, 수렴 임계값 0.0001을 사용하고 차체 roll 보정�
 | `planning_period/control_period` | 0.1 / 0.02 s | 계획·추종 타이머 |
 | `input_timeout/path_timeout` | 0.3 / 0.3 s | ROS stamp와 실제 수신 경과시간 모두 검사 |
 | `grid_resolution/map_radius/map_ttl` | 0.1 m / 6 m / 2 s | 계획용 지도 |
-| `reference_distance/reference_clearance` | 2.5 / 0.23 m | 기준 경로 탐색 범위·중심 여유 |
+| `reference_distance/reference_clearance` | 2.5 / 0.35 m | 로컬 기준 경로 탐색 범위·중심 여유 |
 | `startup_straight_distance` | 0.3 m | 초기화 후 직진 제약을 유지하는 전방 이동 거리, 0이면 사용하지 않음 |
+| `seed_lookahead` | 0.45 m | 이전 해가 없는 최적화 초기 궤적의 조향 목표 거리 |
 | `goal_*_weight` | YAML 참조 | 전진성·측방향·경로 길이·기존 목표점 연속성 |
 | `lookahead/max_tracking_error` | 0.45 / 0.25 m | Pure Pursuit 전방거리·오차 정지 한계 |
 | `min_inlier_ratio/max_icp_residual` | 0.4 / 0.35 m | ICP 진단 통과 기준, 수렴도 요구 |
@@ -185,7 +192,10 @@ ros2 launch obca_navigation navigation_sim.launch.py
 ## 7. 정지 이유와 한계
 
 - `waiting for initial pose and ICP`: 초기 위치 또는 그 이후의 위치 샘플 대기.
-- `waiting for fresh synchronized scan/TF`: 스캔 시각을 둘러싼 위치 또는 센서 TF 부족.
+- `waiting for fresh synchronized scan/TF`: `reason`으로 pose bracket 대기, 실제 센서 TF 누락,
+  오래된 스캔, 유효 ray 부재를 구분합니다. `map_age`와 `queued`도 확인하십시오.
+  이 메시지가 항상 TF 누락을 뜻하지는 않습니다. 유효 상태의 `mapping_ms`는 스캔 반영 시간입니다.
+  모든 상태의 `reference_mode`로 현재 `local`/`raceline` 선택도 확인할 수 있습니다.
 - `ROS clock not started` / `localization stamp is in the future`: `/clock` 및 `use_sim_time` 불일치.
 - `waiting for ICP diagnostics`: 초기화 이후 정합 진단이 아직 수신되지 않음.
 - `stale ICP diagnostics` / `stale ICP pose`: 수신 경과시간과 stamp 나이를 초 단위로 확인.
