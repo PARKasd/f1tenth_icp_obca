@@ -1,5 +1,6 @@
 #include "obca_navigation/core.hpp"
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <queue>
 #include <stdexcept>
@@ -69,6 +70,25 @@ bool clearPolygons(const Grid&g,const Polygon&body,const Polygon&guard,const Con
   return true;
 }
 } // namespace
+double reachableDistance(double speed,const Config &c) {
+  double reach=0;
+  for(int i=1;i<=c.horizon;++i)
+    reach+=c.dt*std::min({c.max_speed,speed+(i-1)*c.dt*c.max_accel,
+      (c.horizon-i+1)*c.dt*c.max_decel});
+  return reach+c.horizon*(std::sqrt(2.0)+c.horizon*c.dt)*c.validation_tolerance;
+}
+double cornerPreviewSpeed(const std::vector<State> &path,double progress,const Config &c) {
+  double limit=c.max_speed,arc=0;
+  for(std::size_t i=0;i<path.size();++i) {
+    if(i)arc+=distance(path[i-1],path[i]);
+    if(arc<progress)continue;
+    const double curvature=std::abs(std::tan(path[i].steering)/c.wheelbase);
+    if(curvature<1e-9)continue;
+    const double turn_speed_squared=c.max_lateral_accel/curvature;
+    limit=std::min(limit,std::sqrt(turn_speed_squared+2*c.max_decel*(arc-progress)));
+  }
+  return limit;
+}
 double angle(double a) { return std::atan2(std::sin(a), std::cos(a)); }
 double distance(const Pose &a, const Pose &b) { return std::hypot(a.x-b.x, a.y-b.y); }
 void Config::validate() const {
@@ -76,12 +96,16 @@ void Config::validate() const {
     max_steering_rate,max_accel,max_decel,max_lateral_accel,solve_seconds,tolerance,
     validation_tolerance,position_weight,heading_weight,speed_weight,steering_weight,
     acceleration_weight,smooth_weight,grid_resolution,map_radius,map_ttl,
-    reference_distance,reference_clearance,validation_step,seed_lookahead,goal_forward_weight,goal_lateral_weight,goal_path_weight,goal_continuity_weight};
+    reference_distance,reference_clearance,validation_step,seed_lookahead,recovery_stationary_speed,goal_clearance_target,goal_continuation_distance};
   for (double v : positive) if (!std::isfinite(v) || v <= 0) throw std::invalid_argument("nonpositive/nonfinite configuration");
+  for(double v : {reference_wall_weight,goal_clearance_weight,goal_progress_weight,
+      goal_route_clearance_weight,goal_turn_weight,goal_continuation_weight,
+      goal_forward_weight,goal_lateral_weight,goal_path_weight,goal_continuity_weight})
+    if(!std::isfinite(v) || v<0)throw std::invalid_argument("invalid reference/goal weight");
   if (horizon < 4 || horizon > 80 || max_obstacles < 1 || max_obstacles > 512 ||
       max_iterations < 1 || max_steering >= 1.4 || map_radius/grid_resolution > 250 ||
       reference_distance >= map_radius || reference_clearance < half_width ||
-      validation_step > grid_resolution/2 || max_speed/max_decel >= horizon*dt)
+      recovery_stationary_speed>max_speed || validation_step > grid_resolution/2 || max_speed/max_decel >= horizon*dt)
     throw std::invalid_argument("inconsistent planning configuration");
 }
 bool overlap(const Pose &p, double front, double rear, double hw, const Box &b) {
@@ -157,11 +181,37 @@ Grid LocalMap::snapshot(const Pose &p,double t) {
   }
   return g;
 }
-static std::vector<Pose> referenceSearch(const Grid &g,const Pose &ego,const Config &c,const std::vector<State> &previous) {
+static std::vector<Pose> referenceSearch(const Grid &g,const Pose &ego,const Config &c,
+    const std::vector<State> &previous,GoalEvaluation *evaluation,double prefix=0,
+    const Pose *root=nullptr) {
+  if(evaluation)*evaluation={};
+  const Pose &origin_pose=root?*root:ego;
+  const double budget=c.reference_distance-prefix;
   const int start=g.index(ego.x,ego.y);
   if(start<0 || g.cells[start]!=0) return {};
   std::vector<double> costs(g.cells.size(),std::numeric_limits<double>::infinity());
   std::vector<int> parents(g.cells.size(),-1), traversable(g.cells.size(),-1);
+  std::vector<double> lengths(g.cells.size(),0.0), clearance(g.cells.size(),0.0);
+  {
+    // Eight-neighbour unit-distance transform is a conservative distance estimate.
+    // Unknown cells and map edges are boundaries too; they never become free.
+    std::vector<int> steps(g.cells.size(),-1);std::queue<int> wave;
+    for(int i=0;i<static_cast<int>(g.cells.size());++i)
+      if(g.cells[i]!=0 || i%g.width==0 || i%g.width==g.width-1 || i/g.width==0 || i/g.width==g.height-1) {
+        steps[i]=0;wave.push(i);
+      }
+    while(!wave.empty()) {
+      const int i=wave.front();wave.pop();const int ix=i%g.width,iy=i/g.width;
+      for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x) {
+        const int nx=ix+x,ny=iy+y;
+        if(nx<0 || nx>=g.width || ny<0 || ny>=g.height)continue;
+        const int j=ny*g.width+nx;
+        if(steps[j]<0){steps[j]=steps[i]+1;wave.push(j);}
+      }
+    }
+    for(std::size_t i=0;i<steps.size();++i)
+      clearance[i]=std::max(0.0,(steps[i]-0.5)*g.resolution);
+  }
   auto free=[&](int i) {
     if(i<0) return false;
     if(traversable[i]>=0) return traversable[i]!=0;
@@ -186,15 +236,42 @@ static std::vector<Pose> referenceSearch(const Grid &g,const Pose &ego,const Con
   using Item=std::pair<double,int>;
   std::priority_queue<Item,std::vector<Item>,std::greater<Item>> q;
   costs[start]=0;q.push({0,start});
-  int best=start;double best_score=0;
+  std::vector<double> minimum_clearance(g.cells.size(),std::numeric_limits<double>::infinity());
+  std::vector<double> initial_heading(g.cells.size(),ego.yaw);
+  const Pose lattice_origin=g.center(start);
+  int best=start;GoalEvaluation selected;
   while(!q.empty()) {
     const auto [cost,i]=q.top();q.pop();if(cost>costs[i])continue;
-    const Pose p=g.center(i);const double dx=p.x-ego.x,dy=p.y-ego.y;
-    const double forward=std::cos(ego.yaw)*dx+std::sin(ego.yaw)*dy;
-    const double sideways=-std::sin(ego.yaw)*dx+std::cos(ego.yaw)*dy;
-    double score=distance(p,ego)+c.goal_forward_weight*forward-c.goal_lateral_weight*std::abs(sideways)-c.goal_path_weight*cost;
-    if(!previous.empty()) score-=c.goal_continuity_weight*distance(p,previous.back());
-    if(cost>c.reference_clearance && score>best_score) {best=i;best_score=score;}
+    const Pose p=g.center(i);
+    if(i!=start && lengths[i]+prefix>c.reference_clearance) {
+      // Estimate the exit direction over a spatial window; scoring individual
+      // 45-degree lattice edges would punish smooth corridors for grid aliasing.
+      int behind=i;
+      while(parents[behind]>=0 && lengths[i]-lengths[behind]<c.seed_lookahead)
+        behind=parents[behind];
+      const Pose tail=g.center(behind);
+      Pose candidate{p.x+ego.x-lattice_origin.x,p.y+ego.y-lattice_origin.y,
+        std::atan2(p.y-tail.y,p.x-tail.x),0};
+      GoalFeatures features;
+      features.observed_connected=free(i) && g.footprint(candidate,c);
+      features.progress_m=lengths[i]+prefix;features.path_cost_m=cost+prefix;
+      const double dx=candidate.x-origin_pose.x,dy=candidate.y-origin_pose.y;
+      features.lateral_m=-std::sin(origin_pose.yaw)*dx+std::cos(origin_pose.yaw)*dy;
+      features.goal_clearance_m=clearance[i];features.route_clearance_m=minimum_clearance[i];
+      features.initial_heading_error_rad=angle(initial_heading[i]-origin_pose.yaw);
+      features.heading_change_rad=angle(candidate.yaw-initial_heading[i]);
+      features.has_previous=!previous.empty();
+      if(features.has_previous)features.previous_goal_distance_m=distance(candidate,previous.back());
+      if(features.observed_connected) {
+        for(double advance=g.resolution;advance<=c.goal_continuation_distance+1e-9;advance+=g.resolution) {
+          Pose ahead=candidate;ahead.x+=advance*std::cos(candidate.yaw);ahead.y+=advance*std::sin(candidate.yaw);
+          if(!free(g.index(ahead.x,ahead.y)) || !g.footprint(ahead,c))break;
+          features.continuation_m=advance;
+        }
+      }
+      auto scored=scoreLocalGoal(features,c);scored.goal=candidate;
+      if(scored.eligible && scored.total>selected.total){best=i;selected=scored;}
+    }
     for(int y=-1;y<=1;++y) for(int x=-1;x<=1;++x) {
       if(x==0 && y==0) continue;
       const int j=g.index(p.x+x*g.resolution,p.y+y*g.resolution);
@@ -202,11 +279,23 @@ static std::vector<Pose> referenceSearch(const Grid &g,const Pose &ego,const Con
       const auto np=g.center(j);
       if(std::cos(ego.yaw)*(np.x-ego.x)+std::sin(ego.yaw)*(np.y-ego.y)<-c.reference_clearance)continue;
       if(x && y && (!free(g.index(p.x+x*g.resolution,p.y)) || !free(g.index(p.x,p.y+y*g.resolution))))continue;
-      const double next=cost+g.resolution*std::hypot(x,y);
-      if(next<=c.reference_distance && next<costs[j]) {costs[j]=next;parents[j]=i;q.push({next,j});}
+      const double step=g.resolution*std::hypot(x,y);
+      const double length=lengths[i]+step;
+      const double proximity=c.reference_clearance/std::max(c.reference_clearance,clearance[j]);
+      const double next=cost+step*(1+c.reference_wall_weight*proximity*proximity);
+      if(length<=budget+1e-9 && next<costs[j]) {
+        costs[j]=next;lengths[j]=length;parents[j]=i;
+        minimum_clearance[j]=std::min(minimum_clearance[i],clearance[j]);
+        if(length+prefix<=c.seed_lookahead+g.resolution)
+          initial_heading[j]=std::atan2(np.y+ego.y-lattice_origin.y-origin_pose.y,
+            np.x+ego.x-lattice_origin.x-origin_pose.x);
+        else initial_heading[j]=initial_heading[i];
+        q.push({next,j});
+      }
     }
   }
   if(best==start)return {};
+  if(evaluation)*evaluation=selected;
   std::vector<Pose> path;
   for(int i=best;i!=start;i=parents[i]) {if(i<0)return {};path.push_back(g.center(i));}
   path.push_back(ego);std::reverse(path.begin(),path.end());
@@ -218,8 +307,9 @@ static std::vector<Pose> referenceSearch(const Grid &g,const Pose &ego,const Con
   path.back().yaw=path[path.size()-2].yaw;
   return path;
 }
-std::vector<Pose> reference(const Grid &g,const Pose &ego,const Config &c,const std::vector<State> &previous) {
-  auto path=referenceSearch(g,ego,c,previous);
+std::vector<Pose> reference(const Grid &g,const Pose &ego,const Config &c,
+    const std::vector<State> &previous,GoalEvaluation *evaluation) {
+  auto path=referenceSearch(g,ego,c,previous,evaluation);
   if(!path.empty() || !g.footprint(ego,c))return path;
   // Circular search clearance can touch the rear blind spot even though the actual
   // rectangle can move forward. Connect to the lattice only through verified free
@@ -236,8 +326,7 @@ std::vector<Pose> reference(const Grid &g,const Pose &ego,const Config &c,const 
     }
     std::string reason;
     if(!validatePath(g,connector,c,reason))break;
-    Config remaining=c;remaining.reference_distance-=advance;
-    path=referenceSearch(g,seed,remaining,previous);
+    path=referenceSearch(g,seed,c,previous,evaluation,advance,&ego);
     if(!path.empty()){path.insert(path.begin(),ego);return path;}
   }
   return {};
@@ -260,6 +349,9 @@ std::vector<Box> obstacles(const Grid &g,const Pose &ego,double reach) {
     previous=std::move(current);
   }
   return result;
+}
+double localStopBuffer(double path_length,double goal_tolerance) {
+  return std::min(goal_tolerance,0.1*std::max(0.0,path_length));
 }
 std::vector<Pose> straightReference(const Grid &g,const Pose &ego,const Config &c) {
   if(!g.footprint(ego,c))return {};
@@ -298,5 +390,84 @@ bool validatePath(const Grid &g,const std::vector<State> &path,const Config &c,s
   }
   if(std::abs(path.back().v)>c.validation_tolerance){reason="terminal speed is nonzero";return false;}
   reason="valid";return true;
+}
+Solution solveObserved(const Grid &grid,const Pose &ego,double steering,
+    const std::vector<Pose> &ref,const std::vector<Box> &boxes,const Config &c,
+    const std::vector<State> &warm,ObservationRecovery *phase) {
+  const auto started=std::chrono::steady_clock::now();
+  const auto elapsed=[&]{return std::chrono::duration<double>(
+    std::chrono::steady_clock::now()-started).count();};
+  const bool stationary=std::abs(ego.v)<=c.recovery_stationary_speed &&
+    std::abs(steering)<=c.max_steering_rate*c.dt;
+  auto recover=[&]() {
+    Solution result;
+    if(!stationary && !(phase && phase->active))return result;
+    Config recovery=c;
+    recovery.reference_distance=std::min(c.reference_distance,c.reference_clearance+c.front);
+    recovery.max_speed=std::min(c.max_speed,0.3);
+    recovery.solve_seconds=c.solve_seconds-elapsed();
+    if(recovery.solve_seconds<=0)return result;
+    const auto connector=straightReference(grid,ego,recovery);
+    if(connector.size()<2)return result;
+    result=solve(ego,steering,connector,boxes,recovery,phase && phase->active?warm:std::vector<State>{},true);
+    std::string reason;
+    if(!result.success){result.states.clear();return result;}
+    if(!validatePath(grid,result.states,recovery,reason)) {
+      result.success=false;result.reason="observation recovery blocked: "+reason;
+      result.states.clear();return result;
+    }
+    double progress=0;
+    for(std::size_t i=1;i<result.states.size();++i)
+      progress+=distance(result.states[i-1],result.states[i]);
+    if(progress<=c.validation_step) {
+      result.success=false;result.states.clear();
+      result.reason="observation recovery blocked: insufficient validated progress";
+      return result;
+    }
+    result.elapsed_ms=elapsed()*1000.0;
+    if(result.elapsed_ms>c.solve_seconds*1000){result.success=false;result.states.clear();return result;}
+    result.reason="solved; recovery=observed_straight";
+    if(phase && !phase->active){phase->active=true;phase->origin=ego;}
+    return result;
+  };
+  if(phase && phase->active) {
+    bool ready=distance(ego,phase->origin)>=c.rear+c.grid_resolution;
+    for(double turn : {-0.01,0.01}) {
+      Pose probe=ego;probe.x+=c.validation_step*std::cos(ego.yaw);
+      probe.y+=c.validation_step*std::sin(ego.yaw);probe.yaw+=turn;
+      ready=ready && grid.footprint(probe,c);
+    }
+    if(!ready) {
+      auto straight=recover();
+      if(!straight.success){phase->active=false;straight.states.clear();
+        if(straight.reason.empty())straight.reason="observation recovery blocked: no validated straight continuation";}
+      return straight;
+    }
+    phase->active=false;
+  }
+  // A tiny initial turn can sweep the rear corner out of the known current
+  // body before enough forward space has been observed. Probe both turn signs
+  // and try the validated connector first, avoiding a wasted full turning solve.
+  if(stationary && ref.size()>=2) {
+    bool blind=false;
+    for(double turn : {-0.01,0.01}) {
+      Pose probe=ego;probe.x+=c.validation_step*std::cos(ego.yaw);
+      probe.y+=c.validation_step*std::sin(ego.yaw);probe.yaw+=turn;
+      if(!grid.footprint(probe,c))blind=true;
+    }
+    if(blind){auto straight=recover();if(straight.success)return straight;}
+  }
+  Config remaining=c;remaining.solve_seconds=c.solve_seconds-elapsed();
+  if(remaining.solve_seconds<=0){Solution result;result.reason="observation recovery deadline";return result;}
+  auto solution=solve(ego,steering,ref,boxes,remaining,warm);
+  solution.elapsed_ms=elapsed()*1000.0;
+  if(!solution.success)return solution;
+  std::string reason;
+  if(validatePath(grid,solution.states,c,reason))return solution;
+  solution.success=false;solution.states.clear();solution.reason=reason;
+  // Never publish the rejected turn, relax unknown-space checks, or recover in motion.
+  auto straight=recover();if(straight.success)return straight;
+  solution.elapsed_ms=elapsed()*1000.0;
+  return solution;
 }
 } // namespace obca

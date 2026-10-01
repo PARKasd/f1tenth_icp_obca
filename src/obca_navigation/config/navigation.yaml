@@ -39,8 +39,19 @@
     map_ttl: 2.0
     reference_distance: 2.5
     reference_clearance: 0.35
+    # Local reference: zero retains distance-only search.
+    recovery_stationary_speed: 0.02
+    reference_wall_weight: 0.0
+    goal_clearance_weight: 0.0
     seed_lookahead: 0.45
     validation_step: 0.04
+    # 관측된 로컬 목표의 정규화된 점수 가중치와 거리 기준.
+    goal_progress_weight: 1.0
+    goal_route_clearance_weight: 0.2
+    goal_turn_weight: 0.1
+    goal_continuation_weight: 0.5
+    goal_clearance_target: 1.0
+    goal_continuation_distance: 0.8
     goal_forward_weight: 0.5
     goal_lateral_weight: 0.1
     goal_path_weight: 0.1

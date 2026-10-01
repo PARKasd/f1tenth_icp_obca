@@ -7,9 +7,27 @@
     base_frame: ego_racecar/base_link
     scan_topic: /scan
     drive_topic: /drive
+    # Planner and tracker must share the same waypoint speed limit.
+    max_speed: 2.0
+    dt: 0.15
+    max_lateral_accel: 1.0
 obca_planner:
   ros__parameters:
     reference_mode: raceline
+    # Local mode: prefer the middle of observed corridors and avoid wall-hugging.
+    reference_wall_weight: 1.0
+    goal_clearance_weight: 0.5
+    position_weight: 16.0
+    # Keep the solve below the sensor watchdog on the planar gym profile.
+    horizon: 12
+    solve_seconds: 0.06
+    planning_period: 0.05
+    reference_distance: 1.6
+    seed_lookahead: 0.30
+obca_tracker:
+  ros__parameters:
+    # Pursuit distance for the simulation profile.
+    lookahead: 0.30
 kinematic_localization:
   ros__parameters:
     lidar_topic: /scan

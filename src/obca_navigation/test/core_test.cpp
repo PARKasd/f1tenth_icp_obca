@@ -10,6 +10,21 @@ obca::Grid grid() {obca::Grid g;g.width=g.height=121;g.resolution=0.1;g.x0=g.y0=
 int main()try {
   using namespace obca;
   Config c;c.solve_seconds=5;c.validate();Pose ego{};
+  check(std::abs(localStopBuffer(0.116,0.12)-0.0116)<1e-9,
+    "short local recovery is classified as already arrived");
+  check(localStopBuffer(2.0,0.12)==0.12,"long path stop buffer changed");
+  check(localStopBuffer(0.0,0.12)==0.0,"zero-length path stop buffer invalid");
+  std::vector<State> preview(3);preview[1].x=1.0;preview[2].x=2.0;
+  Config fast=c;fast.max_speed=2.0;fast.max_lateral_accel=1.0;
+  check(cornerPreviewSpeed(preview,0,fast)==2.0,"straight preview needlessly limits speed");
+  preview[2].steering=std::atan(fast.wheelbase*2.0);
+  check(std::abs(cornerPreviewSpeed(preview,2,fast)-std::sqrt(0.5))<1e-9,
+    "corner preview misses lateral acceleration bound");
+  check(cornerPreviewSpeed(preview,1.5,fast)<1.5,"preview did not brake before future corner");
+  check(cornerPreviewSpeed(preview,0,fast)>cornerPreviewSpeed(preview,1.5,fast),
+    "preview braking does not account for corner distance");
+  check(reachableDistance(0,fast)<fast.max_speed*fast.dt*fast.horizon,
+    "reachable distance ignores acceleration and terminal braking");
   std::vector<Pose> circle;
   for(int i=0;i<120;++i){const double a=i*2*std::acos(-1.0)/120;circle.push_back({3*std::cos(a),3*std::sin(a),a+std::acos(-1.0)/2,0.4});}
   Raceline line(circle);check(line.reset(circle[0],0.3,1.0),"raceline initialization failed");
@@ -31,6 +46,34 @@ int main()try {
   g=grid();g.cells[g.index(0.3,0)]=100;check(!g.footprint(ego,c),"occupied body accepted");
   g=grid();
   const auto ref=reference(g,ego,c);check(ref.size()>2,"forward reference missing");check(ref.back().x>1,"reference must advance");
+  // An off-centre start must converge toward the observed corridor centre,
+  // with symmetric behaviour on either wall and with unknown boundaries too.
+  Config centered=c;centered.reference_clearance=0.35;
+  centered.reference_wall_weight=2.0;centered.goal_clearance_weight=1.5;
+  for(int boundary : {100,-1})for(double offset : {-0.4,0.4}) {
+    auto lane=grid();
+    for(int i=0;i<static_cast<int>(lane.cells.size());++i)
+      if(std::abs(lane.center(i).y)>=1.1)lane.cells[i]=boundary;
+    const Pose start{0,offset,0,0};
+    const auto baseline=reference(lane,start,c), middle=reference(lane,start,centered);
+    check(!baseline.empty(),"baseline corridor reference missing");
+    check(middle.size()>2 && middle.back().x>1.5,"centering lost forward progress");
+    std::cout<<"centering: "<<offset<<" -> "<<middle.back().y<<" baseline "<<baseline.back().y<<'\n';
+    check(std::abs(middle.back().y)<0.16,"local reference did not converge to corridor centre");
+    check(std::abs(middle.back().y)<std::abs(baseline.back().y),"centering did not improve baseline");
+    double arc=0;
+    for(std::size_t i=1;i<middle.size();++i){arc+=distance(middle[i-1],middle[i]);
+      check(lane.cells[lane.index(middle[i].x,middle[i].y)]==0,"centering entered blocked space");}
+    check(arc<=centered.reference_distance+1e-8,"clearance cost changed geometric horizon");
+    if(boundary==100) {
+      Config tracking=centered;tracking.position_weight=16.0;
+      const auto optimized=solve(start,0,middle,obstacles(lane,start,4),tracking);
+      std::string why;
+      check(optimized.success,"off-centre corridor optimization failed");
+      check(validatePath(lane,optimized.states,tracking,why),"centered swept body violates corridor");
+      check(std::abs(optimized.states.back().y)<0.25,"optimized path lost reference centering");
+    }
+  }
   auto solved=solve(ego,0,ref,{},c);
   auto slow_ref=ref;for(auto&p:slow_ref)p.v=0.2;
   auto slow=solve(ego,0,slow_ref,{},c,{},false,true);
@@ -39,6 +82,8 @@ int main()try {
   std::cout<<"straight: "<<solved.reason<<" "<<solved.elapsed_ms<<" ms\n";
   check(solved.success,"empty-space solver failed");
   check(solved.states.back().x>0.5,"solver did not progress");
+  for(const auto &state:solved.states)check(distance(state,ego)<=reachableDistance(ego.v,c),
+    "reachable obstacle bound excludes a solved body position");
   std::string reason;check(validatePath(g,solved.states,c,reason),"straight path invalid");
   check(std::abs(solved.states.back().v)<1e-6,"terminal stop constraint missing");
   const std::vector<Box> walls{{-1,0.7,4,0.9},{-1,-0.9,4,-0.7}};
@@ -80,6 +125,7 @@ int main()try {
   Config deadline=c;deadline.solve_seconds=1e-9;check(!solve(ego,0,ref,walls,deadline).success,"deadline ignored");
   auto unknown=grid();std::fill(unknown.cells.begin(),unknown.cells.end(),-1);
   check(reference(unknown,ego,c).empty(),"unknown grid planned through");
+  check(reference(unknown,ego,centered).empty(),"centering treated unknown space as free");
   check(!validatePath(unknown,solved.states,c,reason),"unknown swept path accepted");
   unknown.has_known_body=true;unknown.known_body=ego;
   check(unknown.footprint(ego,c),"exact physical body is not recognized in blind spot");
@@ -87,6 +133,44 @@ int main()try {
   check(straightReference(unknown,ego,c).empty(),"startup straight reference entered unknown space");
   Pose outside=ego;outside.y=0.02;
   check(!unknown.footprint(outside,c),"self-footprint exemption leaked into unknown space");
+  // At rest, even a tiny initial turn sweeps the rear corner outside the known
+  // physical body into the LiDAR blind spot. Recover only by a validated solve.
+  auto blind=grid();blind.has_known_body=true;blind.known_body=ego;
+  for(int i=0;i<static_cast<int>(blind.cells.size());++i)
+    if(blind.center(i).x<0.15)blind.cells[i]=-1;
+  const std::vector<Pose> turning{{0,0,0,0},{0.5,0,0.07,0},{2,0.3,0.07,0}};
+  auto rejected_turn=solve(ego,0,turning,{},buffered);
+  check(rejected_turn.success && !validatePath(blind,rejected_turn.states,buffered,reason),
+    "blind-spot turning failure was not reproduced");
+  auto observed_recovery=solveObserved(blind,ego,0,turning,{},buffered);
+  check(observed_recovery.success && observed_recovery.reason.find("recovery=")!=std::string::npos,
+    "stationary blind-spot recovery missing");
+  check(validatePath(blind,observed_recovery.states,buffered,reason),"recovery crosses unknown space");
+  check(observed_recovery.states.back().x>0.2,"recovery did not advance");
+  for(const auto &state:observed_recovery.states)
+    check(std::abs(state.yaw)<1e-8 && state.v<=0.3+buffered.validation_tolerance,
+      "recovery is not a low-speed straight path");
+  ObservationRecovery phase;
+  auto phased_start=solveObserved(blind,ego,0,turning,{},buffered,{},&phase);
+  check(phased_start.success && phase.active,"blind recovery phase not armed");
+  Pose creeping{0.05,0,0,0.1};auto continuing_grid=blind;continuing_grid.known_body=creeping;
+  auto continuing=solveObserved(continuing_grid,creeping,0,turning,{},buffered,{},&phase);
+  check(continuing.success && phase.active && continuing.reason.find("recovery=")!=std::string::npos,
+    "recovery oscillates into an unsafe turn while moving");
+  check(validatePath(continuing_grid,continuing.states,buffered,reason),"continued recovery unsafe");
+  Pose clear_start{0.75,0,0,0.1};auto released=solveObserved(grid(),clear_start,0,
+    reference(grid(),clear_start,buffered),{},buffered,{},&phase);
+  check(released.success && !phase.active,"recovery did not release after observed progress");
+  phase.active=true;phase.origin=ego;
+  const auto blocked_recovery=solveObserved(unknown,ego,0,turning,{},buffered,{},&phase);
+  check(!blocked_recovery.success && !phase.active,"blocked recovery remains latched");
+  Pose almost_stopped=ego;almost_stopped.v=0.005;
+  auto creep_recovery=solveObserved(blind,almost_stopped,0,turning,{},buffered);
+  check(creep_recovery.success && validatePath(blind,creep_recovery.states,buffered,reason),
+    "gym residual stop speed permanently prevents recovery");
+  Pose blind_moving=ego;blind_moving.v=0.1;
+  check(!solveObserved(blind,blind_moving,0,turning,{},buffered).success,"blind recovery allowed while moving");
+  check(!solveObserved(unknown,ego,0,turning,{},buffered).success,"recovery filled unknown space");
   LocalMap map(c);map.ray(0,0,2,0,1);map.hit(2,0,1);
   auto observed=map.snapshot(ego,1);check(observed.cells[observed.index(1,0)]==0,"ray free space missing");
   check(observed.cells[observed.index(2,0)]==100,"ray endpoint missing");

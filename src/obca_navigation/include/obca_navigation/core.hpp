@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <map>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,8 +22,20 @@ struct Config {
   double reference_distance{2.5}, reference_clearance{0.23}, validation_step{0.04};
   double seed_lookahead{0.45};
   double goal_forward_weight{0.5}, goal_lateral_weight{0.1}, goal_path_weight{0.1}, goal_continuity_weight{0.3};
+  double recovery_stationary_speed{0.02};
+  double reference_wall_weight{0.0}, goal_clearance_weight{0.0};
+  double goal_progress_weight{1.0}, goal_route_clearance_weight{0.2};
+  double goal_turn_weight{0.1}, goal_continuation_weight{0.5};
+  double goal_clearance_target{1.0}, goal_continuation_distance{0.8};
   void validate() const;
 };
+// Conservative travel bound including acceleration, terminal braking and residual tolerance.
+double reachableDistance(double speed, const Config &config);
+// Brake before a future steering corner, rather than only limiting current steering.
+double cornerPreviewSpeed(const std::vector<State> &path, double progress, const Config &config);
+// A rolling local horizon is not a final destination. Reserve at most 10% of
+// its length for stopping, so short validated observation paths remain usable.
+double localStopBuffer(double path_length, double goal_tolerance);
 double angle(double a);
 double distance(const Pose &a, const Pose &b);
 bool overlap(const Pose &p, double front, double rear, double half_width, const Box &b);
@@ -70,8 +83,26 @@ class Raceline {
   double length_{},progress_{};
   bool initialized_{false};
 };
+// Features are measured only along connected, observed-space search paths.
+struct GoalFeatures {
+  bool observed_connected{false}, has_previous{false};
+  double progress_m{}, lateral_m{}, path_cost_m{};
+  double goal_clearance_m{}, route_clearance_m{};
+  double initial_heading_error_rad{}, heading_change_rad{}, continuation_m{};
+  double previous_goal_distance_m{};
+};
+struct GoalEvaluation {
+  bool eligible{false};
+  Pose goal{};
+  GoalFeatures features{};
+  double total{-std::numeric_limits<double>::infinity()};
+  double progress{}, direction{}, lateral{}, path_cost{}, clearance{};
+  double route_clearance{}, turn{}, continuation{}, continuity{};
+};
+GoalEvaluation scoreLocalGoal(const GoalFeatures &features, const Config &config);
 std::vector<Pose> reference(const Grid &grid, const Pose &ego, const Config &c,
-                            const std::vector<State> &previous = {});
+                            const std::vector<State> &previous = {},
+                            GoalEvaluation *evaluation = nullptr);
 std::vector<Pose> straightReference(const Grid &grid, const Pose &ego, const Config &c);
 std::vector<Box> obstacles(const Grid &grid, const Pose &ego, double reach);
 bool validatePath(const Grid &grid, const std::vector<State> &path, const Config &c,
@@ -87,4 +118,11 @@ Solution solve(const Pose &ego, double steering, const std::vector<Pose> &refere
                const std::vector<Box> &obstacles, const Config &config,
                const std::vector<State> &warm = {}, bool straight_only = false,
                bool reference_speeds = false);
+struct ObservationRecovery { bool active{false}; Pose origin{}; };
+// Solve and validate local mode; a stationary blind-spot failure may use a
+// separately solved, fully validated short straight observation connector.
+Solution solveObserved(const Grid &grid, const Pose &ego, double steering,
+  const std::vector<Pose> &reference, const std::vector<Box> &obstacles,
+  const Config &config, const std::vector<State> &warm = {},
+  ObservationRecovery *recovery = nullptr);
 } // namespace obca
