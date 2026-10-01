@@ -28,6 +28,9 @@ Humble에서 새로 clone하고 빌드하십시오. Jazzy의 바이너리와 ins
 세 C++ 노드의 생존, 파라미터 적용, 레이스라인 발행, 초기화 전 속도 0 출력을 검사합니다.
 검사는 별도 DDS domain 117과 `/obca/test_drive`를 사용합니다.
 
+Jammy의 Ipopt pkg-config에는 BLAS/LAPACK 링크가 포함돼 있어 `libblas-dev`와
+`liblapack-dev`를 package.xml 빌드 의존성으로 선언했습니다. `rosdep install`이 함께 설치합니다.
+
 이 검사는 외부 gym 완주나 실차 제동 성능을 검증하지 않습니다. `docs/validation.md`의
 약 108 m/두 바퀴 주행 기록은 Jazzy 원격 환경의 결과이며 Humble 결과로 바꾸어 해석하지 않습니다.
 누적 ICP 드리프트 및 세 번째 바퀴 정지 한계도 동일하게 남아 있습니다.
