@@ -19,6 +19,7 @@ struct Config {
   double steering_weight{0.2}, acceleration_weight{0.1}, smooth_weight{1.0};
   double grid_resolution{0.1}, map_radius{6.0}, map_ttl{2.0};
   double reference_distance{2.5}, reference_clearance{0.23}, validation_step{0.04};
+  double seed_lookahead{0.45};
   double goal_forward_weight{0.5}, goal_lateral_weight{0.1}, goal_path_weight{0.1}, goal_continuity_weight{0.3};
   void validate() const;
 };

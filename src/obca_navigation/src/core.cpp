@@ -76,7 +76,7 @@ void Config::validate() const {
     max_steering_rate,max_accel,max_decel,max_lateral_accel,solve_seconds,tolerance,
     validation_tolerance,position_weight,heading_weight,speed_weight,steering_weight,
     acceleration_weight,smooth_weight,grid_resolution,map_radius,map_ttl,
-    reference_distance,reference_clearance,validation_step,goal_forward_weight,goal_lateral_weight,goal_path_weight,goal_continuity_weight};
+    reference_distance,reference_clearance,validation_step,seed_lookahead,goal_forward_weight,goal_lateral_weight,goal_path_weight,goal_continuity_weight};
   for (double v : positive) if (!std::isfinite(v) || v <= 0) throw std::invalid_argument("nonpositive/nonfinite configuration");
   if (horizon < 4 || horizon > 80 || max_obstacles < 1 || max_obstacles > 512 ||
       max_iterations < 1 || max_steering >= 1.4 || map_radius/grid_resolution > 250 ||

@@ -16,7 +16,7 @@
     front: 0.38
     rear: 0.14
     half_width: 0.16
-    margin: 0.06
+    margin: 0.12
     max_speed: 0.8
     max_steering: 0.41
     max_steering_rate: 1.0
@@ -38,7 +38,8 @@
     map_radius: 6.0
     map_ttl: 2.0
     reference_distance: 2.5
-    reference_clearance: 0.23
+    reference_clearance: 0.35
+    seed_lookahead: 0.45
     validation_step: 0.04
     goal_forward_weight: 0.5
     goal_lateral_weight: 0.1

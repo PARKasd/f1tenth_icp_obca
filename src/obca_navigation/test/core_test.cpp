@@ -63,6 +63,11 @@ int main()try {
   std::cout<<"detour: "<<detour.reason<<" "<<detour.elapsed_ms<<" ms\n";
   check(detour.success,"static obstacle detour solve failed");
   check(validatePath(detour_grid,detour.states,c,reason),"detour failed independent collision validation");
+  Config buffered=c;buffered.margin=0.12;buffered.reference_clearance=0.35;
+  auto buffered_detour=solve(ego,0,reference(detour_grid,ego,buffered),detour_boxes,buffered);
+  if(!buffered_detour.success)std::cerr<<"buffered detour: "<<buffered_detour.reason<<'\n';
+  check(buffered_detour.success,"larger operational wall clearance prevents feasible detour");
+  check(validatePath(detour_grid,buffered_detour.states,buffered,reason),"buffered detour violates wall clearance");
   // A measured pose can safely move away from a rear obstacle even when its
   // clearance is below the extra reserve required at future trajectory knots.
   auto recoverable=solve(Pose{0,0,0,0.3},0,ref,{{-0.5,-0.3,-0.26,0.3}},c);

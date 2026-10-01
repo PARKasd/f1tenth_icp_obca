@@ -47,3 +47,10 @@
   margin without future swept-step reserve. Keep independent footprint validation unchanged.
 - Denser ICP voxels and disabled roll compensation in sim.yaml are low-speed planar-gym
   settings only. Keep real-car ICP tuning and its wider correspondence search unchanged.
+- Integrate at most one scan per planning tick, choosing the newest scan with bracketed
+  poses and sensor extrinsics. Do not weaken timestamps, watchdogs or unknown-space checks
+  to hide queue overload. Report the synchronization reason and mapping time separately.
+- Operational navigation.yaml uses 0.12 m margin and 0.35 m local reference clearance.
+  Keep both the reference and optimized swept-body checks when changing wall clearance.
+- Cold-start seeds follow bicycle dynamics with braking and bounded pursuit steering
+  (seed_lookahead). They are initial guesses only; never publish without the full solve and validation.
