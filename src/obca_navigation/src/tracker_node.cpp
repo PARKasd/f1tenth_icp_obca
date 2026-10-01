@@ -45,7 +45,15 @@ class Tracker:public rclcpp::Node {
  private:
   void publish(double speed,double steer,double acceleration){ackermann_msgs::msg::AckermannDriveStamped m;m.header.stamp=now();m.header.frame_id=base_;
     m.drive.speed=speed;m.drive.steering_angle=steer;m.drive.steering_angle_velocity=c_.max_steering_rate;m.drive.acceleration=acceleration;pub_->publish(m);speed_=speed;steering_=steer;}
-  void commandStop(){publish(0,steering_,c_.max_decel);}
+  void commandStop(){
+    // At a measured standstill, centre steering gradually so a validated
+    // straight recovery is not permanently blocked by the last turning command.
+    const double steer=have_pose_ && age(pose_received_)<=timeout_ &&
+      now().seconds()>=pose_stamp_ && now().seconds()-pose_stamp_<=timeout_ &&
+      std::abs(ego_.v)<=c_.recovery_stationary_speed?
+      std::clamp(0.0,steering_-c_.max_steering_rate*period_,steering_+c_.max_steering_rate*period_):steering_;
+    publish(0,steer,c_.max_decel);
+  }
   bool fresh(double stamp,Steady::time_point received,double limit,double t)const{return stamp>=reset_ && t>=stamp && t-stamp<=limit && age(received)<=limit;}
   void tick(){
     const auto tick=Steady::now();const double elapsed=std::chrono::duration<double>(tick-last_tick_).count();last_tick_=tick;
@@ -59,14 +67,19 @@ class Tracker:public rclcpp::Node {
       const double e=std::hypot(ego_.x-a.x_m-f*dx,ego_.y-a.y_m-f*dy);
       if(e<error){error=e;closest=i;progress=a.s_m+f*(b.s_m-a.s_m);}}
     const double remaining=path_.back().s_m-progress;
-    if(error>max_error_ || remaining<=goal_tolerance_ || std::abs(angle(path_[closest].psi_rad-ego_.yaw))>std::acos(-1.0)/2){commandStop();return;}
+    const double stop_buffer=localStopBuffer(path_.back().s_m-path_.front().s_m,goal_tolerance_);
+    if(error>max_error_ || remaining<=stop_buffer || std::abs(angle(path_[closest].psi_rad-ego_.yaw))>std::acos(-1.0)/2){commandStop();return;}
     std::size_t target=closest+1;while(target+1<path_.size() && path_[target].s_m-progress<lookahead_)++target;
     const double dx=path_[target].x_m-ego_.x,dy=path_[target].y_m-ego_.y;
     const double local_x=std::cos(ego_.yaw)*dx+std::sin(ego_.yaw)*dy,local_y=-std::sin(ego_.yaw)*dx+std::cos(ego_.yaw)*dy;
     if(local_x<=0){commandStop();return;}
     const double desired=std::clamp(std::atan2(2*c_.wheelbase*local_y,dx*dx+dy*dy),-c_.max_steering,c_.max_steering);
     const double steer=std::clamp(desired,steering_-c_.max_steering_rate*elapsed,steering_+c_.max_steering_rate*elapsed);
-    double speed=std::min({c_.max_speed,path_[closest+1].vx_mps,std::sqrt(2*c_.max_decel*std::max(0.0,remaining-goal_tolerance_))});
+    double speed=std::min({c_.max_speed,path_[closest+1].vx_mps,std::sqrt(2*c_.max_decel*std::max(0.0,remaining-stop_buffer))});
+    std::vector<State> preview;preview.reserve(path_.size());
+    for(const auto &w:path_){State point;point.x=w.x_m;point.y=w.y_m;
+      point.steering=std::atan(c_.wheelbase*w.kappa_radpm);preview.push_back(point);}
+    speed=std::min(speed,cornerPreviewSpeed(preview,progress,c_));
     speed=std::min(speed,std::sqrt(c_.max_lateral_accel*c_.wheelbase/std::max(1e-9,std::abs(std::tan(steer)))));
     speed=std::min(speed,speed_+c_.max_accel*elapsed);
     publish(speed,steer,speed<speed_?c_.max_decel:c_.max_accel);

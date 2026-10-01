@@ -240,7 +240,7 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
     // Start the NLP from a dynamically consistent braking rollout, rather than
     // placing states on a lattice corner while initializing every steering to zero.
     std::vector<double> seed_steering(c.horizon,steering);
-    if(warm.empty() && !straight_only){
+    if(!straight_only){
       z[0]=ego.x;z[1]=ego.y;z[2]=ego.yaw;z[3]=ego.v;
       std::size_t target=1;double last=steering;
       for(int i=0;i<c.horizon;++i){const int k=4*i;
@@ -248,15 +248,24 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
         while(target+1<ref.size() && distance(pose,ref[target])<c.seed_lookahead)++target;
         const double dx=ref[target].x-pose.x,dy=ref[target].y-pose.y;
         const double lateral=-std::sin(pose.yaw)*dx+std::cos(pose.yaw)*dy;
-        const double desired=std::clamp(std::atan2(2*c.wheelbase*lateral,dx*dx+dy*dy),-c.max_steering,c.max_steering);
+        const double desired=warm.empty()?
+          std::clamp(std::atan2(2*c.wheelbase*lateral,dx*dx+dy*dy),-c.max_steering,c.max_steering):
+          std::clamp(warm[std::min(warm_start+i,warm.size()-1)].steering,-c.max_steering,c.max_steering);
         last=std::clamp(desired,last-c.max_steering_rate*c.dt,last+c.max_steering_rate*c.dt);
         seed_steering[i]=last;
         z[k+4]=pose.x+c.dt*pose.v*std::cos(pose.yaw);
         z[k+5]=pose.y+c.dt*pose.v*std::sin(pose.yaw);
         z[k+6]=pose.yaw+c.dt*pose.v*std::tan(last)/c.wheelbase;
-        // Avoid seeding a high-speed collision across a sharp lattice corner.
-        // This is only an initial guess; the raceline speed remains the objective.
-        z[k+7]=std::max(0.0,pose.v-c.max_decel*c.dt);
+        // Keep a slow forward seed at rest: an all-zero-speed rollout makes
+        // steering ineffective in the initial guess at a tight corner. Moving
+        // cold starts still brake toward this crawl speed; terminal braking is
+        // reserved. The seed is never published without solving and validation.
+        const double desired_speed=warm.empty()?
+          std::min({0.1,c.max_speed,(c.horizon-i-1)*c.dt*c.max_decel}):
+          std::min(warm[std::min(warm_start+i+1,warm.size()-1)].v,
+            (c.horizon-i-1)*c.dt*c.max_decel);
+        z[k+7]=std::clamp(desired_speed,std::max(0.0,pose.v-c.max_decel*c.dt),
+          std::min(c.max_speed,pose.v+c.max_accel*c.dt));
       }
     }
     for(int pair=0;pair<static_cast<int>(p.pairs.size());++pair) {
@@ -283,7 +292,7 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
     const int u=p.controls()+2*i,r=6*i;
     p.lo[u]=-c.max_steering;p.hi[u]=c.max_steering;p.lo[u+1]=-c.max_decel;p.hi[u+1]=c.max_accel;
     z[u]=seed_steering[i];z[u+1]=std::clamp((z[4*(i+1)+3]-z[4*i+3])/c.dt,-c.max_decel,c.max_accel);
-    if(!warm.empty())z[u]=std::clamp(warm[std::min(warm_start+i,warm.size()-1)].steering,-c.max_steering,c.max_steering);
+    if(straight_only && !warm.empty())z[u]=std::clamp(warm[std::min(warm_start+i,warm.size()-1)].steering,-c.max_steering,c.max_steering);
     if(straight_only)p.lo[u]=p.hi[u]=z[u]=0;
     p.gl[r+4]=-c.max_steering_rate*c.dt;p.gu[r+4]=c.max_steering_rate*c.dt;
     p.gl[r+5]=-c.max_lateral_accel;p.gu[r+5]=c.max_lateral_accel;

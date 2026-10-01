@@ -54,6 +54,7 @@ class Planner : public rclcpp::Node {
     status_pub_=create_publisher<std_msgs::msg::String>(declare_parameter<std::string>("status_topic","/obca/status"),1);
     initial_sub_=create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(declare_parameter<std::string>("initial_pose_topic","/initialpose"),10,
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr m){
+        observation_recovery_={};goal_summary_.clear();
         Pose p;if(m->header.frame_id!=frame_ || !poseFrom(m->pose.pose,p)){armed_=false;stop("invalid initial pose");return;}
         if(raceline_ && !raceline_->reset(p,raceline_max_error_,raceline_max_heading_error_)) {
           armed_=false;stop("initial pose does not match raceline position/heading; use the same map frame");return;
@@ -78,7 +79,8 @@ class Planner : public rclcpp::Node {
     drive_sub_=create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(declare_parameter<std::string>("drive_topic","/obca/drive"),1,
       [this](ackermann_msgs::msg::AckermannDriveStamped::ConstSharedPtr m){if(std::isfinite(m->drive.steering_angle))steering_=m->drive.steering_angle;});
     timer_=create_wall_timer(std::chrono::duration<double>(period_),[this]{tick();});
-    RCLCPP_INFO(get_logger(),"ICP + OBCA: reference_mode=%s; waiting for /initialpose",reference_mode_.c_str());
+    RCLCPP_INFO(get_logger(),"ICP + OBCA: reference_mode=%s; retain_observations=%s; waiting for /initialpose",
+      reference_mode_.c_str(),c_.retain_observations?"true":"false");
   }
  private:
   std::optional<Pose> at(double t)const {
@@ -125,12 +127,15 @@ class Planner : public rclcpp::Node {
     else sync_reason_="scan has no usable rays";
     return true;
   }
-  void status(const std::string&s){std_msgs::msg::String msg;msg.data=s+"; reference_mode="+reference_mode_;status_pub_->publish(msg);}
+  void status(const std::string&s){std_msgs::msg::String msg;msg.data=s+goal_summary_+
+    "; map_memory="+(c_.retain_observations?"accumulated":"expiring")+
+    "; reference_mode="+reference_mode_;status_pub_->publish(msg);}
   void stop(const std::string&s){f110_msgs::msg::WpntArray m;m.header.frame_id=frame_;m.header.stamp=now();path_pub_->publish(m);
     nav_msgs::msg::Path p;p.header=m.header;visual_pub_->publish(p);previous_.clear();status(s);}
   void tick() {
+    goal_summary_.clear();
     const double t=now().seconds();
-    if(last_clock_>0 && t<last_clock_){armed_=false;map_.clear();history_.clear();scans_.clear();stop("clock reset: initial pose required");}
+    if(last_clock_>0 && t<last_clock_){armed_=false;observation_recovery_={};map_.clear();history_.clear();scans_.clear();stop("clock reset: initial pose required");}
     last_clock_=t;
     if(t<=0){stop("ROS clock not started: check /clock or set use_sim_time:=false for standard gym");return;}
     if(!armed_ || awaiting_pose_ || history_.empty()){stop("waiting for initial pose and ICP");return;}
@@ -162,25 +167,50 @@ class Planner : public rclcpp::Node {
     if(startup_ && (ego.x-initial_.x)*std::cos(initial_.yaw)+(ego.y-initial_.y)*std::sin(initial_.yaw)>=startup_straight_distance_) {
       startup_=false;previous_.clear();
     }
+    GoalEvaluation goal_evaluation;
     auto ref=startup_?straightReference(grid,ego,c_):raceline_?
       raceline_->reference(ego,c_.reference_distance,c_.grid_resolution,raceline_max_error_,raceline_max_heading_error_,
-        raceline_forward_window_,raceline_backward_window_):reference(grid,ego,c_,previous_);
+        raceline_forward_window_,raceline_backward_window_):reference(grid,ego,c_,previous_,&goal_evaluation);
+    if(goal_evaluation.eligible) {
+      const auto &score=goal_evaluation;
+      goal_summary_="; goal_score="+std::to_string(score.total)+
+        "; goal_progress_m="+std::to_string(score.features.progress_m)+
+        "; goal_clearance_m="+std::to_string(score.features.goal_clearance_m)+
+        "; goal_continuation_m="+std::to_string(score.features.continuation_m)+
+        "; goal_direction_score="+std::to_string(score.direction)+
+        "; goal_continuation_score="+std::to_string(score.continuation)+
+        "; goal_turn_score="+std::to_string(score.turn)+
+        "; goal_continuity_score="+std::to_string(score.continuity);
+    }
     // The raceline is an optimization target: it may cross a newly observed obstacle.
     // OBCA must be allowed to deviate around it. Only the resulting swept path,
     // not the target itself, is required to stay in observed free space.
-    if(ref.size()<2){stop(raceline_ && !startup_ ? "raceline tracking lost: position/heading/progress window mismatch" :
+    // A stopped car can have no circular-clearance search seed in a rear
+    // blind spot. Let solveObserved attempt its fully checked observation
+    // connector even before a recovery phase has been armed.
+    if(ref.size()<2 && !raceline_ && (observation_recovery_.active ||
+        std::abs(ego.v)<=c_.recovery_stationary_speed))ref=straightReference(grid,ego,c_);
+    if(ref.size()<2){observation_recovery_.active=false;stop(raceline_ && !startup_ ? "raceline tracking lost: position/heading/progress window mismatch" :
       "reference missing: no connected route in observed free space");return;}
-    const double reach=c_.max_speed*c_.horizon*c_.dt+std::hypot(std::max(c_.front,c_.rear),c_.half_width)+
+    const double reach=reachableDistance(ego.v,c_)+std::hypot(std::max(c_.front,c_.rear),c_.half_width)+
       std::sqrt(2.0)*(c_.margin+c_.validation_step)+c_.validation_tolerance;
     const auto boxes=obstacles(grid,ego,reach);
     if(boxes.size()>static_cast<std::size_t>(c_.max_obstacles)){stop("obstacle budget exceeded: count="+
       std::to_string(boxes.size())+"; limit="+std::to_string(c_.max_obstacles)+"; no obstacle was discarded");return;}
     const double input_stamp=history_.back().first;
-    auto solution=solve(ego,steering_,ref,boxes,c_,previous_,startup_,raceline_.has_value() && !startup_);
+    auto solution=(!startup_ && !raceline_)?solveObserved(grid,ego,steering_,ref,boxes,c_,previous_,&observation_recovery_):
+      solve(ego,steering_,ref,boxes,c_,previous_,startup_,raceline_.has_value() && !startup_);
     std::string reason;
     if(!solution.success){stop(solution.reason+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; pairs="+std::to_string(solution.collision_pairs));return;}
     if(now().seconds()-map_stamp_>timeout_ || now().seconds()-input_stamp>timeout_ || age(pose_received_)>timeout_ || age(diag_received_)>timeout_){stop("inputs expired during optimization");return;}
     if(!validatePath(grid,solution.states,c_,reason)){stop(reason);return;}
+    double path_length=0;
+    for(std::size_t i=1;i<solution.states.size();++i)
+      path_length+=distance(solution.states[i-1],solution.states[i]);
+    if(path_length<=c_.validation_step) {
+      observation_recovery_.active=false;
+      stop("path blocked: insufficient validated progress; path_length_m="+std::to_string(path_length));return;
+    }
     f110_msgs::msg::WpntArray msg;msg.header.frame_id=frame_;
     // Timestamp the input state, not solve completion; consumers account for optimization age.
     msg.header.stamp=rclcpp::Time(static_cast<int64_t>(input_stamp*1e9));
@@ -189,14 +219,15 @@ class Planner : public rclcpp::Node {
       f110_msgs::msg::Wpnt w;w.id=static_cast<int>(i);w.s_m=s;w.x_m=p.x;w.y_m=p.y;w.psi_rad=p.yaw;w.vx_mps=p.v;w.ax_mps2=p.acceleration;w.kappa_radpm=std::tan(p.steering)/c_.wheelbase;msg.wpnts.push_back(w);
       geometry_msgs::msg::PoseStamped ps;ps.header=msg.header;ps.pose=poseMessage(p);path.poses.push_back(ps);}
     path_pub_->publish(msg);visual_pub_->publish(path);previous_=solution.states;
-    status(std::string("valid; mode=")+(startup_?"startup_straight":"obca")+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size())+"; pairs="+std::to_string(solution.collision_pairs)+
-      "; mapping_ms="+std::to_string(mapping_ms)+(raceline_?"; raceline_s="+std::to_string(raceline_->progress())+"; lap_length="+std::to_string(raceline_->length()):""));
+    status(std::string("valid; mode=")+(startup_?"startup_straight":solution.reason.find("recovery=")!=std::string::npos?"observed_straight":"obca")+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size())+"; pairs="+std::to_string(solution.collision_pairs)+
+      "; path_length_m="+std::to_string(s)+"; mapping_ms="+std::to_string(mapping_ms)+(raceline_?"; raceline_s="+std::to_string(raceline_->progress())+"; lap_length="+std::to_string(raceline_->length()):""));
   }
+  ObservationRecovery observation_recovery_;
   Config c_;LocalMap map_;tf2_ros::Buffer buffer_;tf2_ros::TransformListener listener_;
   std::string frame_,base_,scan_convention_,quality_reason_,sync_reason_{"no scan received"};double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
   int max_queue_{};bool no_return_free_{},armed_{false},awaiting_pose_{true},healthy_{false};
   double startup_straight_distance_{};bool startup_{false};
-  std::string reference_mode_;std::optional<Raceline>raceline_;
+  std::string reference_mode_,goal_summary_;std::optional<Raceline>raceline_;
   double raceline_max_error_{},raceline_max_heading_error_{},raceline_forward_window_{},raceline_backward_window_{};
   double reset_{},map_stamp_{},diag_stamp_{},last_clock_{},steering_{};Pose initial_;
   Steady::time_point pose_received_{},diag_received_{},map_received_{};
