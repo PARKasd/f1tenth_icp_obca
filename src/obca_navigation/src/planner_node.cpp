@@ -26,6 +26,19 @@ class Planner : public rclcpp::Node {
     reset_position_tolerance_=declare_parameter("reset_position_tolerance",0.5);
     reset_yaw_tolerance_=declare_parameter("reset_yaw_tolerance",0.35);
     startup_straight_distance_=declare_parameter("startup_straight_distance",0.3);
+    reference_mode_=declare_parameter<std::string>("reference_mode","local");
+    const auto raceline_file=declare_parameter<std::string>("raceline_file","");
+    raceline_max_error_=declare_parameter("raceline_max_error",1.0);
+    raceline_max_heading_error_=declare_parameter("raceline_max_heading_error",1.2);
+    raceline_forward_window_=declare_parameter("raceline_forward_window",2.0);
+    raceline_backward_window_=declare_parameter("raceline_backward_window",0.3);
+    if(reference_mode_!="local" && reference_mode_!="raceline")throw std::invalid_argument("reference_mode must be local or raceline");
+    if(!std::isfinite(raceline_max_error_+raceline_max_heading_error_+raceline_forward_window_+raceline_backward_window_) ||
+      raceline_max_error_<=0 || raceline_max_heading_error_<=0 || raceline_max_heading_error_>=std::acos(-1.0)/2 ||
+      raceline_forward_window_<=0 || raceline_backward_window_<0)throw std::invalid_argument("invalid raceline tracking parameters");
+    if(reference_mode_=="raceline")raceline_.emplace(Raceline::loadCsv(raceline_file));
+    if(raceline_ && (raceline_forward_window_>=raceline_->length()/2 || raceline_backward_window_>=raceline_->length()/2))
+      throw std::invalid_argument("raceline progress windows must be smaller than half the lap length");
     if(!std::isfinite(timeout_+period_+history_seconds_+min_inlier_+max_residual_+reset_position_tolerance_+reset_yaw_tolerance_) ||
        timeout_<=0 || period_<=0 || history_seconds_<=timeout_ || max_queue_<1 ||
        min_inlier_<0 || min_inlier_>1 || max_residual_<=0 || reset_position_tolerance_<=0 || reset_yaw_tolerance_<=0 ||
@@ -33,11 +46,18 @@ class Planner : public rclcpp::Node {
        (scan_convention_!="begin" && scan_convention_!="end"))throw std::invalid_argument("invalid planner timing/quality settings");
     path_pub_=create_publisher<f110_msgs::msg::WpntArray>(declare_parameter<std::string>("waypoints_topic","/obca/waypoints"),1);
     visual_pub_=create_publisher<nav_msgs::msg::Path>(declare_parameter<std::string>("path_topic","/obca/path"),1);
+    raceline_pub_=create_publisher<nav_msgs::msg::Path>(declare_parameter<std::string>("raceline_topic","/obca/raceline"),rclcpp::QoS(1).transient_local());
+    if(raceline_){nav_msgs::msg::Path path;path.header.frame_id=frame_;path.header.stamp=now();
+      for(const auto&p:raceline_->points()){geometry_msgs::msg::PoseStamped m;m.header=path.header;m.pose=poseMessage(p);path.poses.push_back(m);}
+      path.poses.push_back(path.poses.front());raceline_pub_->publish(path);}
     grid_pub_=create_publisher<nav_msgs::msg::OccupancyGrid>(declare_parameter<std::string>("grid_topic","/obca/local_grid"),1);
     status_pub_=create_publisher<std_msgs::msg::String>(declare_parameter<std::string>("status_topic","/obca/status"),1);
     initial_sub_=create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(declare_parameter<std::string>("initial_pose_topic","/initialpose"),10,
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr m){
         Pose p;if(m->header.frame_id!=frame_ || !poseFrom(m->pose.pose,p)){armed_=false;stop("invalid initial pose");return;}
+        if(raceline_ && !raceline_->reset(p,raceline_max_error_,raceline_max_heading_error_)) {
+          armed_=false;stop("initial pose does not match raceline position/heading; use the same map frame");return;
+        }
         reset_=now().seconds();initial_=p;startup_=startup_straight_distance_>0;awaiting_pose_=true;armed_=true;healthy_=false;quality_reason_="waiting for ICP diagnostics after initial pose";diag_received_={};history_.clear();scans_.clear();previous_.clear();map_.clear();map_stamp_=0;stop("initial pose: waiting for new ICP scans");});
     odom_sub_=create_subscription<nav_msgs::msg::Odometry>(declare_parameter<std::string>("pose_topic","/pf/pose/odom"),rclcpp::QoS(50),
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m){
@@ -58,7 +78,7 @@ class Planner : public rclcpp::Node {
     drive_sub_=create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(declare_parameter<std::string>("drive_topic","/obca/drive"),1,
       [this](ackermann_msgs::msg::AckermannDriveStamped::ConstSharedPtr m){if(std::isfinite(m->drive.steering_angle))steering_=m->drive.steering_angle;});
     timer_=create_wall_timer(std::chrono::duration<double>(period_),[this]{tick();});
-    RCLCPP_INFO(get_logger(),"Mapless OBCA: waiting for /initialpose; no global raceline or frozen map");
+    RCLCPP_INFO(get_logger(),"ICP + OBCA: reference_mode=%s; waiting for /initialpose",reference_mode_.c_str());
   }
  private:
   std::optional<Pose> at(double t)const {
@@ -129,15 +149,21 @@ class Planner : public rclcpp::Node {
     if(startup_ && (ego.x-initial_.x)*std::cos(initial_.yaw)+(ego.y-initial_.y)*std::sin(initial_.yaw)>=startup_straight_distance_) {
       startup_=false;previous_.clear();
     }
-    const auto ref=startup_?straightReference(grid,ego,c_):reference(grid,ego,c_,previous_);
-    if(ref.size()<2){stop("reference missing: no connected route in observed free space");return;}
+    auto ref=startup_?straightReference(grid,ego,c_):raceline_?
+      raceline_->reference(ego,c_.reference_distance,c_.grid_resolution,raceline_max_error_,raceline_max_heading_error_,
+        raceline_forward_window_,raceline_backward_window_):reference(grid,ego,c_,previous_);
+    // The raceline is an optimization target: it may cross a newly observed obstacle.
+    // OBCA must be allowed to deviate around it. Only the resulting swept path,
+    // not the target itself, is required to stay in observed free space.
+    if(ref.size()<2){stop(raceline_ && !startup_ ? "raceline tracking lost: position/heading/progress window mismatch" :
+      "reference missing: no connected route in observed free space");return;}
     const double reach=c_.max_speed*c_.horizon*c_.dt+std::hypot(std::max(c_.front,c_.rear),c_.half_width)+
       std::sqrt(2.0)*(c_.margin+c_.validation_step)+c_.validation_tolerance;
     const auto boxes=obstacles(grid,ego,reach);
     if(boxes.size()>static_cast<std::size_t>(c_.max_obstacles)){stop("obstacle budget exceeded: count="+
       std::to_string(boxes.size())+"; limit="+std::to_string(c_.max_obstacles)+"; no obstacle was discarded");return;}
     const double input_stamp=history_.back().first;
-    auto solution=solve(ego,steering_,ref,boxes,c_,previous_,startup_);
+    auto solution=solve(ego,steering_,ref,boxes,c_,previous_,startup_,raceline_.has_value() && !startup_);
     std::string reason;
     if(!solution.success){stop(solution.reason+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; pairs="+std::to_string(solution.collision_pairs));return;}
     if(now().seconds()-map_stamp_>timeout_ || now().seconds()-input_stamp>timeout_ || age(pose_received_)>timeout_ || age(diag_received_)>timeout_){stop("inputs expired during optimization");return;}
@@ -150,17 +176,21 @@ class Planner : public rclcpp::Node {
       f110_msgs::msg::Wpnt w;w.id=static_cast<int>(i);w.s_m=s;w.x_m=p.x;w.y_m=p.y;w.psi_rad=p.yaw;w.vx_mps=p.v;w.ax_mps2=p.acceleration;w.kappa_radpm=std::tan(p.steering)/c_.wheelbase;msg.wpnts.push_back(w);
       geometry_msgs::msg::PoseStamped ps;ps.header=msg.header;ps.pose=poseMessage(p);path.poses.push_back(ps);}
     path_pub_->publish(msg);visual_pub_->publish(path);previous_=solution.states;
-    status(std::string("valid; mode=")+(startup_?"startup_straight":"obca")+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size())+"; pairs="+std::to_string(solution.collision_pairs));
+    status(std::string("valid; mode=")+(startup_?"startup_straight":"obca")+"; solve_ms="+std::to_string(solution.elapsed_ms)+"; boxes="+std::to_string(boxes.size())+"; pairs="+std::to_string(solution.collision_pairs)+
+      (raceline_?"; raceline_s="+std::to_string(raceline_->progress())+"; lap_length="+std::to_string(raceline_->length()):""));
   }
   Config c_;LocalMap map_;tf2_ros::Buffer buffer_;tf2_ros::TransformListener listener_;
   std::string frame_,base_,scan_convention_,quality_reason_;double timeout_{},min_inlier_{},max_residual_{},period_{},history_seconds_{},reset_position_tolerance_{},reset_yaw_tolerance_{};
   int max_queue_{};bool no_return_free_{},armed_{false},awaiting_pose_{true},healthy_{false};
   double startup_straight_distance_{};bool startup_{false};
+  std::string reference_mode_;std::optional<Raceline>raceline_;
+  double raceline_max_error_{},raceline_max_heading_error_{},raceline_forward_window_{},raceline_backward_window_{};
   double reset_{},map_stamp_{},diag_stamp_{},last_clock_{},steering_{};Pose initial_;
   Steady::time_point pose_received_{},diag_received_{},map_received_{};
   std::deque<std::pair<double,Pose>> history_;std::deque<sensor_msgs::msg::LaserScan::ConstSharedPtr> scans_;std::vector<State>previous_;
   rclcpp::Publisher<f110_msgs::msg::WpntArray>::SharedPtr path_pub_;rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr visual_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_pub_;rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raceline_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_sub_;

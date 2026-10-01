@@ -81,7 +81,11 @@ class LaunchProfiles(unittest.TestCase):
 
     def test_wrapper_profiles(self):
         for mode in ('real', 'sim'):
-            include, = load(f'navigation_{mode}.launch.py').generate_launch_description()
+            actions = load(f'navigation_{mode}.launch.py').generate_launch_description()
+            include = actions[-1]
+            if mode == 'sim':
+                self.assertEqual(actions[0].args[0], 'raceline_file')
+                self.assertEqual(actions[0].kwargs['default_value'], str(PACKAGE / 'racelines' / 'map.csv'))
             self.assertEqual(dict(include.kwargs['launch_arguments'])['profile_file'],
                              str(PACKAGE / 'config' / f'{mode}.yaml'))
             self.assertEqual(include.args[0].args[0], str(PACKAGE / 'launch' / 'navigation.launch.py'))
@@ -95,6 +99,7 @@ class LaunchProfiles(unittest.TestCase):
             self.assertEqual(nodes[name]['drive_topic'], '/drive_autonomous')
         self.assertEqual(nodes['kinematic_localization']['odom_topic'], '/odom')
         self.assertIs(nodes['kinematic_localization']['publish_map_odom_tf'], True)
+        self.assertEqual(nodes['kinematic_localization']['voxel_size'], 1.0)
 
     def test_sim_profile(self):
         nodes = self.nodes('sim.yaml')
@@ -105,6 +110,14 @@ class LaunchProfiles(unittest.TestCase):
             self.assertEqual(nodes[name]['drive_topic'], '/drive')
         self.assertEqual(nodes['kinematic_localization']['odom_topic'], '/ego_racecar/odom')
         self.assertIs(nodes['kinematic_localization']['publish_map_odom_tf'], False)
+        self.assertEqual(nodes['obca_planner']['reference_mode'], 'raceline')
+        self.assertEqual(nodes['kinematic_localization']['voxel_size'], 0.25)
+        self.assertIs(nodes['kinematic_localization']['tilt_compensation_enable'], False)
+
+    def test_raceline_overrides(self):
+        nodes = self.nodes('sim.yaml', reference_mode='local', raceline_file='/tmp/test.csv')
+        self.assertEqual(nodes['obca_planner']['reference_mode'], 'local')
+        self.assertEqual(nodes['obca_planner']['raceline_file'], '/tmp/test.csv')
 
     def test_common_preserves_preview_output(self):
         nodes = self.nodes()

@@ -1,8 +1,8 @@
-# 지도 없는 ICP + OBCA 주행
+# ICP + 최소 곡률 레이스라인 + OBCA 주행
 
 ## 1. 목적과 구성
 
-초기 위치와 실제 차체 방향을 수동 지정하고, 최근 LiDAR 관측으로 경로를 생성하는
+초기 위치와 실제 차체 방향을 수동 지정하고, 최소 곡률 레이스라인과 최근 LiDAR 관측으로 경로를 생성하는
 ROS 2 Jazzy 저속 프로토타입입니다. 모든 런타임 노드는 C++17입니다.
 
 | 노드 | 역할 |
@@ -29,12 +29,18 @@ ROS 2 Jazzy 저속 프로토타입입니다. 모든 런타임 노드는 C++17입
    NaN은 무시합니다. +inf/range_max는 기본적으로 free 증거가 아닙니다.
 6. `map_radius` 바깥과 `map_ttl`보다 오래된 관측은 제거합니다. 계획용 로컬 지도는 제한된
    범위만 유지하고, ICP의 누적 지도는 별도로 저장할 수 있습니다.
-7. 연결된 free 셀 안에서 Dijkstra 탐색을 수행합니다. 대각선으로 막힌 코너를 통과하지
+7. 시뮬 기본 `raceline` 모드는 원본 저장소의 offline generator CSV를 읽습니다. 초기 방향에 맞춰
+   순방향 또는 역방향을 선택하고, 가까운 arc-length 구간에서 현재 진행 위치를 갱신합니다.
+   누적 진행 거리는 랩 경계를 넘어 이어지며 가까운 반대편 헤어핀으로 재탐색하지 않습니다.
+   `local` 모드에서는 연결된 free 셀 안에서 Dijkstra 탐색을 수행합니다. 대각선으로 막힌 코너를 통과하지
    않으며 전진성·이동 거리·이전 경로와의 연속성을 점수화해 전방 목표점을 선택합니다.
    초기화 직후에는 `startup_straight_distance`만큼 전진할 때까지 별도의 직진 reference를
    사용합니다. 관측된 공간에서 차체 전체가 통과하는 구간만 생성하고, 최적화의 조향각과
    yaw를 고정합니다. 앞이 막혔으면 정지하며 강제로 직진하지 않습니다.
-8. 기준 경로와 이전 성공 해를 초기값으로 사용해 OBCA 최적화를 수행합니다.
+8. 기준 경로와 이전 성공 해를 초기값으로 사용해 OBCA 최적화를 수행합니다. 레이스라인의
+   속도 프로파일은 차량 상한·감속 한계와 함께 적용합니다. 레이스라인이 새 장애물과 겹쳐도
+   목표 자체를 삭제하지 않고 OBCA가 우회하도록 합니다. 지도에서 생성한 레이스라인은
+   현재 공간이 안전하다는 증거가 아니며, 최종 경로는 관측된 공간 안에 있어야 합니다.
 9. 해 상태, 시간 제한, 모든 변수·제약 잔차, 연속 구간의 차량 swept footprint를 검사합니다.
    검사에 실패하면 빈 `WpntArray`를 발행하며 추종기는 정지합니다.
 10. 성공한 경로를 별도 추종 프로세스가 따라갑니다. 최적화가 오래 걸려도 추종기의
@@ -62,7 +68,9 @@ Gᵀ mu + R(yaw)ᵀ Aᵀ lambda = 0
 
 이는 차량 중심점만 피하는 비용함수가 아니라 회전하는 직사각형 차체의 거리 제약입니다.
 `d_min = sqrt(2) * (margin + validation_step) + validation_tolerance`로 설정해
-독립 검사에서 쓰는 보수적 여유와 이산화 오차를 수용합니다. 따라서 실제 최소 계획 여유는
+미래 상태의 독립 검사에서 쓰는 보수적 여유와 이산화 오차를 수용합니다. 고정된 현재 상태는
+그 앞에 보간 구간이 없으므로 `sqrt(2) * margin + validation_tolerance`를 적용합니다.
+현재 상태도 차체 및 margin 검사를 통과해야 합니다. 따라서 실제 최소 계획 여유는
 `margin` 한 값보다 큽니다. 장애물 셀 자체도 반사점보다 보수적인 사각 영역입니다.
 
 목적함수는 기준 위치·방향·속도 추종과 조향·가속도·조향 변화의 합입니다.
@@ -97,6 +105,7 @@ unknown 공간은 현재 구현에서 최적화 후의 전체 footprint 검사�
 | `/obca/local_grid` | `nav_msgs/OccupancyGrid` | 계획용 지도: -1 unknown / 0 free / 100 occupied |
 | `/obca/waypoints` | `f110_msgs/WpntArray` | 검사 완료 경로, 빈 배열은 정지 |
 | `/obca/path` | `nav_msgs/Path` | RViz 경로 |
+| `/obca/raceline` | `nav_msgs/Path` | 전체 기준 레이스라인, transient-local QoS |
 | `/obca/status` | `std_msgs/String` | 성공·정지 이유 및 계산시간 |
 | `/obca/drive` | `ackermann_msgs/AckermannDriveStamped` | 추종 출력, 계획기의 최근 조향 추정 입력 |
 
@@ -115,9 +124,17 @@ CLI 인자를 생략하면 YAML 값을 유지합니다. 공통 launch만 실행�
 `/obca/drive`로 명령을 발행합니다.
 ICP 전체 기본값은 `kinematic_localization/config/kinematic_localization.yaml`을 먼저 읽고
 navigation YAML과 launch 선택값으로 덮어씁니다.
+Jazzy의 wildcard·노드별 YAML 우선순위 차이를 피하기 위해 launch가 노드별 최종 파라미터를
+하나의 사전으로 합친 뒤 전달합니다. 저속 평면 gym에서는 `sim.yaml`의 ICP voxel 0.25 m,
+source voxel 0.1 m, 수렴 임계값 0.0001을 사용하고 차체 roll 보정을 끕니다. 실차는 기존
+1.0 m voxel을 유지합니다. 시뮬 튜닝값을 고속 실차에 그대로 적용하지 마십시오.
 
 | 파라미터 | 기본값 | 의미 |
 |---|---|---|
+| `reference_mode` | local, 시뮬 raceline | 로컬 탐색 또는 글로벌 레이스라인 기준 |
+| `raceline_file` | 시뮬 launch에서 설치된 map.csv | x_m/y_m/psi_rad/vx_mps 열이 있는 CSV |
+| `raceline_max_error/raceline_max_heading_error` | 1.0 m / 1.2 rad | 초기화 및 추종 투영 허용 오차 |
+| `raceline_forward_window/raceline_backward_window` | 2.0 / 0.3 m | 이전 진행 거리 주변의 탐색 범위, 각각 반 랩 미만 |
 | `front/rear/half_width` | 0.38 / 0.14 / 0.16 m | base_frame 기준 차체 형상, 실제 장착 기준점 확인 필요 |
 | `wheelbase` | 0.3302 m | bicycle model 축간거리 |
 | `max_speed` | 0.8 m/s | 저속 프로토타입 상한 |
@@ -173,6 +190,7 @@ ros2 launch obca_navigation navigation_sim.launch.py
 - `stale ICP diagnostics` / `stale ICP pose`: 수신 경과시간과 stamp 나이를 초 단위로 확인.
 - `ICP quality`: 수렴 여부, 정합률과 최소값, 잔차와 최대값, dead reckoning 및 거부 여부를 확인.
 - `reference missing`: 관측된 공간에서 연결된 reference를 찾지 못함. 출발점의 원형 여유 공간 검사가 후방 사각지대에 걸리면, 차량의 실제 swept footprint로 검증한 짧은 직진 연결 구간을 통해 탐색을 다시 시도합니다. 미관측 셀을 자유 공간으로 바꾸지는 않습니다.
+- `raceline tracking lost`: 위치·방향 또는 연속 진행 거리 범위를 벗어남. 좌표계, 초기 위치, ICP 누적 오차를 확인합니다.
 - `obstacle budget exceeded`: 장애물 사각형 수가 설정 한도를 초과함. 현재 개수와 한도를 함께 표시합니다.
 - `Ipopt status=...`: 비수렴·불가능한 문제·계산시간 초과.
 - `swept footprint reaches ...`: 장애물 또는 미관측 영역에 차체가 닿음.
@@ -189,3 +207,19 @@ ros2 launch obca_navigation navigation_sim.launch.py
 3. 계속 정지하면 `ros2 topic echo /obca/status`로 구체적인 정지 이유를 확인합니다.
 4. `ICP quality`이면 `ros2 topic echo /kinematic_localization/diagnostics --once`를 확인합니다. 첫 스캔은 지도 초기화 때문에 미수렴일 수 있으나 이후에도 계속되면 정합 원인을 조사해야 합니다.
 5. 원인 확인 전에 품질 검사나 입력 timeout을 해제하지 않습니다.
+
+## 8. 레이스라인 준비와 시각화
+
+1. [racelines/README.md](../racelines/README.md)의 명령으로 실제 트랙 지도에서 CSV를 생성합니다.
+   원본의 최소 곡률 알고리즘을 사용하며, 지도는 오프라인 생성에만 사용합니다.
+2. 곡률·벽 여유 경고를 확인하고 차량 조향 한계에 맞는 결과인지 검사합니다.
+3. `ros2 launch obca_navigation navigation_sim.launch.py raceline_file:=/absolute/path/global_waypoints.csv`로 실행합니다.
+   실차는 `navigation_real.launch.py reference_mode:=raceline raceline_file:=...`를 사용합니다.
+4. 같은 지도 좌표계에서 실제 차체 위치와 방향을 `/initialpose`로 지정합니다.
+5. RViz Path에 `/obca/raceline`을 추가하고 Durability를 Transient Local로 설정합니다.
+   `/obca/path`는 회피·종단 정지 제약을 적용한 현재 OBCA 경로입니다.
+6. `/obca/status`의 `raceline_s`와 `lap_length`로 누적 진행 거리를 확인합니다.
+
+레이스라인 파일은 ICP의 절대 위치를 보정하지 않습니다. frozen map이나 loop closure 없이
+장시간 주행하면 누적 드리프트로 기준선이 실제 벽에 가까워질 수 있고, 이 경우 OBCA와
+관측 지도 검사에 의해 우회하거나 정지합니다. 전역 최단 시간 및 무한 연속주행 보장은 없습니다.

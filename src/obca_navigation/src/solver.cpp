@@ -145,7 +145,7 @@ Bool intermediate(Index,Index,Number,Number,Number,Number,Number,Number,Number,N
   auto &p=*static_cast<Problem*>(data);
   return std::chrono::duration<double>(Clock::now()-p.start).count()<p.c.solve_seconds;
 }
-std::vector<Pose> sampleTargets(const std::vector<Pose>&ref,const Pose&ego,const Config&c) {
+std::vector<Pose> sampleTargets(const std::vector<Pose>&ref,const Pose&ego,const Config&c,bool reference_speeds) {
   std::vector<double> s(ref.size(),0);
   for(std::size_t i=1;i<ref.size();++i)s[i]=s[i-1]+distance(ref[i-1],ref[i]);
   std::vector<Pose> out;double progress=0,speed=std::max(0.0,ego.v);
@@ -154,9 +154,11 @@ std::vector<Pose> sampleTargets(const std::vector<Pose>&ref,const Pose&ego,const
     const std::size_t j=std::min<std::size_t>(std::max<std::size_t>(1,upper-s.begin()),ref.size()-1);
     const double fraction=std::clamp((progress-s[j-1])/std::max(1e-9,s[j]-s[j-1]),0.0,1.0);
     Pose p{ref[j-1].x+fraction*(ref[j].x-ref[j-1].x),ref[j-1].y+fraction*(ref[j].y-ref[j-1].y),ref[j-1].yaw,speed};
+    const double speed_limit=reference_speeds?std::min(c.max_speed,ref[j-1].v+fraction*(ref[j].v-ref[j-1].v)):c.max_speed;
+    p.v=std::min(p.v,speed_limit);
     p.yaw=ego.yaw+angle(p.yaw-ego.yaw);out.push_back(p);
     progress=std::min(s.back(),progress+speed*c.dt);
-    speed=std::min({c.max_speed,speed+c.max_accel*c.dt,std::max(0.0,(c.horizon-i-1)*c.dt*c.max_decel),std::sqrt(2*c.max_decel*std::max(0.0,s.back()-progress))});
+    speed=std::min({speed_limit,speed+c.max_accel*c.dt,std::max(0.0,(c.horizon-i-1)*c.dt*c.max_decel),std::sqrt(2*c.max_decel*std::max(0.0,s.back()-progress))});
   }
   out.back().v=0;return out;
 }
@@ -188,14 +190,14 @@ double derivativeError() {
   return error;
 }
 #endif
-Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,const std::vector<Box> &boxes,const Config &c,const std::vector<State> &warm,bool straight_only) {
+Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,const std::vector<Box> &boxes,const Config &c,const std::vector<State> &warm,bool straight_only,bool reference_speeds) {
   Solution result; const auto started=Clock::now();
   c.validate();
   if(ref.size()<2) {result.reason="reference missing: no connected route in observed free space";return result;}
   if(boxes.size()>static_cast<std::size_t>(c.max_obstacles)) {result.reason="obstacle budget exceeded: count="+
     std::to_string(boxes.size())+"; limit="+std::to_string(c.max_obstacles);return result;}
   if(!std::isfinite(ego.x+ego.y+ego.yaw+ego.v+steering) || ego.v<0 || ego.v>c.max_speed+c.validation_tolerance || std::abs(steering)>c.max_steering) {result.reason="initial state outside configured limits";return result;}
-  Problem p{c,ego,steering,boxes,sampleTargets(ref,ego,c),{},{},{},{},started,{},{},{}};
+  Problem p{c,ego,steering,boxes,sampleTargets(ref,ego,c,reference_speeds),{},{},{},{},started,{},{},{}};
   const double straight_distance=distance(ego,ref.back());
   // Bounds follow directly from the discrete speed/acceleration limits and the
   // terminal stop. Omit a knot/obstacle pair only if no feasible body can reach it.
@@ -232,6 +234,7 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
       p.lo[k]=std::min(ego.x,end_x);p.hi[k]=std::max(ego.x,end_x);
       p.lo[k+1]=std::min(ego.y,end_y);p.hi[k+1]=std::max(ego.y,end_y);}
     p.lo[k+2]=ego.yaw-2*std::acos(-1.0);p.hi[k+2]=ego.yaw+2*std::acos(-1.0);p.hi[k+3]=c.max_speed;
+    if(reference_speeds)p.hi[k+3]=std::min(c.max_speed,std::max(p.targets[i].v,ego.v-i*c.dt*c.max_decel));
     if(straight_only)p.lo[k+2]=p.hi[k+2]=z[k+2]=ego.yaw;
   }
     for(int pair=0;pair<static_cast<int>(p.pairs.size());++pair) {
@@ -240,7 +243,10 @@ Solution solve(const Pose &ego,double steering,const std::vector<Pose> &ref,cons
       // The independent swept validator expands both body axes. A Euclidean
       // clearance of sqrt(2)*padding also covers the expanded corners.
       p.gl[r]=-inf;p.gu[r]=1;
-      p.gl[r+3]=std::sqrt(2.0)*(c.margin+c.validation_step)+c.validation_tolerance;
+      // Knot zero is measured and fixed, with no interpolation segment before it.
+      // Future knots reserve the extra swept-step clearance. Requiring that reserve
+      // at the current pose made small tracking errors irrecoverably infeasible.
+      p.gl[r+3]=std::sqrt(2.0)*(c.margin+(i==0?0:c.validation_step))+c.validation_tolerance;
       p.gu[r+3]=inf;
       const auto &b=boxes[j];double nx=seed.x-std::clamp(seed.x,b.xmin,b.xmax),ny=seed.y-std::clamp(seed.y,b.ymin,b.ymax);
       const double norm=std::hypot(nx,ny);if(norm>1e-9){nx/=norm;ny/=norm;}else{nx=1;ny=0;}

@@ -1,6 +1,8 @@
 #include "obca_navigation/core.hpp"
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
+#include <cstdio>
 #include <stdexcept>
 namespace obca { double derivativeError(); }
 void check(bool value,const char* message) {if(!value)throw std::runtime_error(message);}
@@ -8,6 +10,20 @@ obca::Grid grid() {obca::Grid g;g.width=g.height=121;g.resolution=0.1;g.x0=g.y0=
 int main()try {
   using namespace obca;
   Config c;c.solve_seconds=5;c.validate();Pose ego{};
+  std::vector<Pose> circle;
+  for(int i=0;i<120;++i){const double a=i*2*std::acos(-1.0)/120;circle.push_back({3*std::cos(a),3*std::sin(a),a+std::acos(-1.0)/2,0.4});}
+  Raceline line(circle);check(line.reset(circle[0],0.3,1.0),"raceline initialization failed");
+  for(int i=1;i<=240;++i){const auto route=line.reference(circle[i%120],1.5,0.1,0.3,1.0,1.0,0.2);
+    check(route.size()>2,"raceline wrap lost tracking");}
+  check(line.progress()>1.9*line.length(),"raceline lap progress did not unwrap");
+  Pose reverse_pose=circle[0];reverse_pose.yaw+=std::acos(-1.0);
+  check(line.reset(reverse_pose,0.3,1.0),"initial heading did not reverse raceline");
+  auto reversed=line.reference(reverse_pose,1,0.1,0.3,1.0,1.0,0.2);
+  check(reversed.size()>2 && reversed[1].y<reverse_pose.y,"reversed raceline points wrong way");
+  check(line.reference(circle[60],1,0.1,0.3,1.0,1.0,0.2).empty(),"raceline projection jumped outside continuity window");
+  {std::ofstream csv("raceline_test_input.csv");csv<<"id,x_m,y_m,psi_rad,vx_mps\n0,0,0,0,0.2\n1,2,0,1.57,0.2\n2,2,2,3.14,0.2\n";}
+  check(Raceline::loadCsv("raceline_test_input.csv").points().size()==3,"generator CSV not loaded");
+  std::remove("raceline_test_input.csv");
   auto g=grid();
   check(derivativeError()<1e-6,"analytic gradient/Jacobian/Hessian mismatch");
   check(g.footprint(ego,c),"empty-space footprint");
@@ -16,6 +32,10 @@ int main()try {
   g=grid();
   const auto ref=reference(g,ego,c);check(ref.size()>2,"forward reference missing");check(ref.back().x>1,"reference must advance");
   auto solved=solve(ego,0,ref,{},c);
+  auto slow_ref=ref;for(auto&p:slow_ref)p.v=0.2;
+  auto slow=solve(ego,0,slow_ref,{},c,{},false,true);
+  check(slow.success,"raceline speed profile solve failed");
+  for(const auto&p:slow.states)check(p.v<=0.2+c.validation_tolerance,"raceline speed profile ignored");
   std::cout<<"straight: "<<solved.reason<<" "<<solved.elapsed_ms<<" ms\n";
   check(solved.success,"empty-space solver failed");
   check(solved.states.back().x>0.5,"solver did not progress");
@@ -43,6 +63,10 @@ int main()try {
   std::cout<<"detour: "<<detour.reason<<" "<<detour.elapsed_ms<<" ms\n";
   check(detour.success,"static obstacle detour solve failed");
   check(validatePath(detour_grid,detour.states,c,reason),"detour failed independent collision validation");
+  // A measured pose can safely move away from a rear obstacle even when its
+  // clearance is below the extra reserve required at future trajectory knots.
+  auto recoverable=solve(Pose{0,0,0,0.3},0,ref,{{-0.5,-0.3,-0.26,0.3}},c);
+  check(recoverable.success,"safe measured pose incorrectly requires future swept-step reserve");
   auto blocked=solve(ego,0,ref,{{-0.2,-0.3,0.5,0.3}},c);
   check(!blocked.success && blocked.states.empty(),"infeasible initial collision accepted");
   std::vector<Box> excess(c.max_obstacles+1);const auto overflow=solve(ego,0,ref,excess,c);

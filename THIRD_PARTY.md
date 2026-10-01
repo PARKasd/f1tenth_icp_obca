@@ -1,5 +1,11 @@
 # Provenance
 
+- `offline_trajectory_generator`: reused from the user-provided parent repository snapshot,
+  including its CLI, GUI, configuration, documentation and instructions. This is an offline
+  Python helper, not a ROS runtime node. No separate license notice was present in that
+  directory; this repository's Apache-2.0 declaration for new OBCA code does not relicense it.
+  Generated raceline data records the source map hash and exact generator options.
+
 - `src/kinematic_localization`: copied from the parent `2026_IFAC-transition_global` snapshot;
   package declares MIT. Original source, docs and license notices retained. This repository adds
   manual SLAM initialization and clears the accumulated map on reset. No parent git revision was

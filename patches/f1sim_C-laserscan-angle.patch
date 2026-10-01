@@ -1,0 +1,12 @@
+diff --git a/f1tenth_gym_ros/f1tenth_gym_ros/gym_bridge.py b/f1tenth_gym_ros/f1tenth_gym_ros/gym_bridge.py
+--- a/f1tenth_gym_ros/f1tenth_gym_ros/gym_bridge.py
++++ b/f1tenth_gym_ros/f1tenth_gym_ros/gym_bridge.py
+@@ -119,7 +119,7 @@
+         ego_drive_topic = self.get_parameter('ego_drive_topic').value
+         self.angle_min = -scan_fov / 2.
+         self.angle_max = scan_fov / 2.
+-        self.angle_inc = scan_fov / scan_beams
++        self.angle_inc = scan_fov / (scan_beams - 1)
+         self.ego_namespace = self.get_parameter('ego_namespace').value
+         ego_odom_topic = self.ego_namespace + '/' + self.get_parameter('ego_odom_topic').value
+         self.scan_distance_to_base_link = self.get_parameter('scan_distance_to_base_link').value

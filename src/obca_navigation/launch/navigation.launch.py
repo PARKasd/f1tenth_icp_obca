@@ -1,5 +1,6 @@
 """Standalone manual-initial-pose ICP + OBCA stack; external LiDAR/odom/TF required."""
 import os
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -40,14 +41,29 @@ def _nodes(context):
     icp_overrides.update(slam_mode=True, require_initial_pose=True,
                          auto_init_from_waypoints=False, map_name='', smoothing_enable=False)
     parameters = [config] + ([profile] if profile else [])
+    planner_overrides = dict(common)
+    for name in ('reference_mode', 'raceline_file'):
+        if arg(name):
+            planner_overrides[name] = arg(name)
+    def resolved(name, files, overrides):
+        # Resolve layers before handing them to ROS: a later wildcard override can
+        # otherwise lose to an earlier node-specific YAML section on Jazzy.
+        values = {}
+        for filename in files:
+            with open(filename, encoding='utf-8') as source:
+                document = yaml.safe_load(source)
+            for key in ('/**', name, '/' + name):
+                values.update(document.get(key, {}).get('ros__parameters', {}))
+        values.update(overrides)
+        return [values]
     return [
         Node(package='kinematic_localization', executable='localization_node',
              name='kinematic_localization', output='screen',
-             parameters=[icp_config, *parameters, icp_overrides]),
+             parameters=resolved('kinematic_localization', [icp_config, *parameters], icp_overrides)),
         Node(package='obca_navigation', executable='planner_node', name='obca_planner',
-             output='screen', parameters=[*parameters, common]),
+             output='screen', parameters=resolved('obca_planner', parameters, planner_overrides)),
         Node(package='obca_navigation', executable='tracker_node', name='obca_tracker',
-             output='screen', parameters=[*parameters, common]),
+             output='screen', parameters=resolved('obca_tracker', parameters, common)),
     ]
 
 
@@ -57,6 +73,8 @@ def generate_launch_description():
     arguments = [
         DeclareLaunchArgument('params_file', default_value=config),
         DeclareLaunchArgument('profile_file', default_value=''),
+        DeclareLaunchArgument('reference_mode', default_value=''),
+        DeclareLaunchArgument('raceline_file', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value=''),
         DeclareLaunchArgument('scan_topic', default_value=''),
         DeclareLaunchArgument('wheel_odom_topic', default_value=''),

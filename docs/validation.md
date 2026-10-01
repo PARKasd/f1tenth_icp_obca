@@ -1,5 +1,43 @@
 # 검증 기록
 
+최신 검증을 위에 기록합니다. 아래 초기 Windows 검증의 미수행 항목은 당시의 상태이며,
+이후 원격 ROS/gym 검증 결과와 구분해서 읽으십시오.
+
+## 레이스라인 기준 연속주행 (2026-10-01)
+
+1. 원본 `offline_trajectory_generator`를 차용해 현재 시뮬 지도에서 최소 곡률 레이스라인을
+   생성했습니다. 472점, 폐곡선 길이 43.358 m, 최대 절대 곡률 1.149128 rad/m,
+   생성기 기준 최소 벽 거리 0.584 m입니다. 생성 옵션과 지도 해시는 `racelines`에 기록했습니다.
+2. C++ CSV 입력·초기 방향 선택·랩 경계의 누적 진행 거리·속도 프로파일 제한을 추가했습니다.
+   Windows 코어 검사에서 CSV, 두 랩 투영, 역방향 선택, 진행 창 밖 점프 거부,
+   0.2 m/s 속도 프로파일, 현재 상태의 안전 여유 회귀 검사와 기존 검사가 통과했습니다.
+   Python launch 검사 8개도 통과했습니다.
+3. 실제 Jazzy에서 노드별 YAML 값이 뒤의 wildcard launch override보다 우선하는 문제를
+   확인하고, launch에서 노드별 최종 사전을 합쳐 전달하도록 수정했습니다.
+4. 외부 `f1sim_C`의 C++ ray caster와 ROS LaserScan의 angle_increment 불일치를 수정했습니다.
+   1080빔에서 각도 끝점 오차는 수정 전 약 -0.00435 rad, 수정 후 2.01e-7 rad였습니다.
+   [외부 시뮬 패치](../patches/README.md)를 함께 제공합니다. 원격 시뮬 저장소의 사용자
+   지도·config 변경은 유지했고 외부 저장소에는 커밋/푸시하지 않았습니다.
+5. 원격 Jazzy/gym에서 `(6.505364, -0.146211, 0.054081 rad)`로 초기화하고 `/drive`를
+   연결했습니다. 최대 속도 0.8 m/s, ICP voxel 0.25 m/source voxel 0.1 m,
+   frozen map·loop closure 없이 **약 108 m, 완전한 두 바퀴 이후 세 번째 바퀴 일부**를 주행했습니다.
+   1초 상태 샘플의 누적 raceline 진행 값은 19.546 → 128.470 m였습니다.
+6. 이 실행에서 출발 경로 11회, 일반 OBCA 경로 1379회가 유효했습니다. 상태에 기록된
+   전체 solve 시간은 5.46~99.66 ms였습니다. 1초마다 채집한 유효 상태의 solve 시간은
+   중앙값 36.09 ms, p95 56.56 ms입니다. 최악 실행시간 보장은 아닙니다.
+7. **무정지 반복 완주는 아직 보장하지 않습니다.** 중간의 미관측 공간 검증 실패로 짧은
+   정지가 있었고, 약 140초/108 m 이후 세 번째 코너에서 `swept footprint ... step 2`가
+   지속돼 정지했습니다. 1초 위치 샘플 기준 ICP와 gym 실제 위치 차이는 최대 약 0.273 m였습니다.
+   절대 좌표 보정 없는 누적 드리프트와 미관측 영역을 최적화 후 검사하는 구조가 남은 한계입니다.
+   ICP voxel을 더 작은 0.1 m로 바꾼 비교 실행은 약 64 m에서 정지해 기본값으로 채택하지 않았습니다.
+8. 검증 종료 시 속도 0을 발행하고 테스트용 navigation을 종료했습니다. 안전 검사,
+   150 ms solver 예산, 300 ms 입력 watchdog, 미관측 공간 차단을 해제하지 않았습니다.
+
+주행 로그는 원격 `/tmp/obca-raceline-angle-fixed025-result.json`과
+`/tmp/obca-raceline-angle-fixed025-trace.jsonl`에 남겼습니다. 같은 지도와 위 초기 pose로
+README의 시뮬 launch를 실행하고 `/obca/status`, `/pf/pose/odom`, `/ego_racecar/odom`을
+기록하면 진행 거리·계산시간·위치 차이를 재확인할 수 있습니다. 실차 고속 검증은 수행하지 않았습니다.
+
 ## 출발 직진 제약 및 계산량 개선 (2026-10-01)
 
 1. 초기 pose 후 기본 0.3 m 전진 구간에 조향 0·고정 yaw 제약을 추가했습니다. 직진 reference와 최종 차량 swept footprint 모두 관측 지도로 검증하며, 미관측 영역을 free로 간주하지 않습니다.
@@ -58,7 +96,7 @@ Windows x64에서 임시 도구를 사용했습니다. 도구는 저장소에 �
   다운로드 wheel은 PyPI 메타데이터의 SHA-256과 대조했습니다.
 - CMake `OBCA_STANDALONE=ON` 구성, 빌드, CTest 실행 성공.
 
-최종 핵심 테스트 실행 결과:
+초기 핵심 테스트 실행 결과:
 
 ```text
 straight: solved 11.053 ms
@@ -109,10 +147,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_core_windows.ps1 
 
 스크립트는 이미 내려받은 도구를 사용하며 시스템 설치나 추가 다운로드를 하지 않습니다.
 
-## 3. 아직 수행하지 못한 검증
+## 3. 초기 Windows 환경에서 수행하지 못한 검증
 
-현재 PC에는 ROS 2 Jazzy, ament, WSL Linux 배포판이 없습니다. 따라서 다음 항목은
-완료됐다고 볼 수 없습니다.
+초기 로컬 PC에는 ROS 2 Jazzy, ament, WSL Linux 배포판이 없었습니다. 아래 항목은 당시
+완료되지 않았으며, 이후 원격 환경에서 수행한 항목은 문서 위쪽에 별도로 기록했습니다.
 
 실제 ROS 구성도 시도했으며 `find_package(ament_cmake)`에서
 `ament_cmakeConfig.cmake`를 찾지 못해 중단됐습니다. standalone core 구성은 복구했습니다.

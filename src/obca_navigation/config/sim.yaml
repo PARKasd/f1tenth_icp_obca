@@ -7,6 +7,9 @@
     base_frame: ego_racecar/base_link
     scan_topic: /scan
     drive_topic: /drive
+obca_planner:
+  ros__parameters:
+    reference_mode: raceline
 kinematic_localization:
   ros__parameters:
     lidar_topic: /scan
@@ -15,3 +18,10 @@ kinematic_localization:
     # Gym already owns the ground-truth vehicle TF tree.
     publish_map_odom_tf: false
     map_output_file: sim_slam_map.kissmap
+    # The planar gym sensor has no chassis roll or pitch.
+    tilt_compensation_enable: false
+    # Low-speed planar simulation: denser live ICP map and registration source.
+    # Keep the wider real-car convergence basin in the hardware profile.
+    voxel_size: 0.25
+    source_voxel_size: 0.1
+    convergence_criterion: 0.0001

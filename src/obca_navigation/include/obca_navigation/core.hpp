@@ -48,6 +48,27 @@ class LocalMap {
   Config c_;
   std::map<std::pair<int,int>, Cell> cells_;
 };
+// Closed raceline, with unwrapped progress to avoid switching hairpin branches.
+class Raceline {
+ public:
+  explicit Raceline(std::vector<Pose> points);
+  static Raceline loadCsv(const std::string &path);
+  bool reset(const Pose &ego,double max_error,double max_heading_error);
+  std::vector<Pose> reference(const Pose &ego,double lookahead,double step,
+    double max_error,double max_heading_error,double forward_window,double backward_window);
+  const std::vector<Pose>& points()const{return points_;}
+  double progress()const{return progress_;}
+  double length()const{return length_;}
+ private:
+  void rebuild();
+  Pose sample(double progress)const;
+  bool project(const Pose &ego,double max_error,double max_heading_error,
+    double forward_window,double backward_window,bool global);
+  std::vector<Pose> points_;
+  std::vector<double> arc_;
+  double length_{},progress_{};
+  bool initialized_{false};
+};
 std::vector<Pose> reference(const Grid &grid, const Pose &ego, const Config &c,
                             const std::vector<State> &previous = {});
 std::vector<Pose> straightReference(const Grid &grid, const Pose &ego, const Config &c);
@@ -63,5 +84,6 @@ struct Solution {
 };
 Solution solve(const Pose &ego, double steering, const std::vector<Pose> &reference,
                const std::vector<Box> &obstacles, const Config &config,
-               const std::vector<State> &warm = {}, bool straight_only = false);
+               const std::vector<State> &warm = {}, bool straight_only = false,
+               bool reference_speeds = false);
 } // namespace obca

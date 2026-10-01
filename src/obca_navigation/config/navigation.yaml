@@ -49,6 +49,13 @@
     max_icp_residual: 0.35
 obca_planner:
   ros__parameters:
+    reference_mode: local
+    raceline_file: ""
+    raceline_topic: /obca/raceline
+    raceline_max_error: 1.0
+    raceline_max_heading_error: 1.2
+    raceline_forward_window: 2.0
+    raceline_backward_window: 0.3
     path_topic: /obca/path
     grid_topic: /obca/local_grid
     status_topic: /obca/status

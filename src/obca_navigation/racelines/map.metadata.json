@@ -1,0 +1,117 @@
+{
+  "map_yaml": "f1tenth_gym_ros/maps/map.yaml",
+  "map_image": "f1tenth_gym_ros/maps/map.png",
+  "resolution": 0.025,
+  "origin": [
+    -17.9339,
+    -8.42608,
+    0.0
+  ],
+  "waypoint_count": 472,
+  "centerline_count": 477,
+  "estimated_lap_time_sec": 54.19759093655752,
+  "args": {
+    "map_yaml": "f1tenth_gym_ros/maps/map.yaml",
+    "output_dir": "src/obca_navigation/racelines",
+    "waypoint_step": 0.1,
+    "optimizer_step": 0.2,
+    "safety_width": 0.7,
+    "boundary_margin": 0.08,
+    "max_width_distance": 5.0,
+    "width_mode": "hybrid",
+    "max_speed": 0.8,
+    "min_speed": 0.15,
+    "velocity_limits_csv": "offline_trajectory_generator/config/velocity_limits.csv",
+    "max_curvature": 1.15,
+    "smooth_sigma": 4.0,
+    "raceline_smooth_sigma": 12.0,
+    "median_kernel": 3,
+    "morph_kernel": 5,
+    "morph_open_iterations": 1,
+    "morph_close_iterations": 1,
+    "skeleton_prune_iterations": 80,
+    "min_skeleton_component_area": 40,
+    "min_track_width": 0.3,
+    "min_centerline_angle": 75.0,
+    "spike_filter_iterations": 8,
+    "optimizer": "mincurv",
+    "max_optimizer_iter": 200,
+    "curvature_weight": 1.0,
+    "smooth_weight": 0.04,
+    "length_weight": 0.002,
+    "d_ratio": 0.0,
+    "d_ratio_alpha_smooth_sigma": 0.0,
+    "straighten_straights": false,
+    "straight_kappa_threshold": 0.2,
+    "straight_min_length": 1.5,
+    "straight_clearance_margin": 0.03,
+    "straight_blend_length": 0.5,
+    "reverse": false,
+    "no_flip_y": false,
+    "unknown_as_free": false,
+    "debug_image": true,
+    "velocity_limits": [
+      [
+        0.0,
+        6.4,
+        3.0,
+        10.0
+      ],
+      [
+        1.0,
+        6.3,
+        3.0,
+        10.0
+      ],
+      [
+        2.0,
+        5.9,
+        3.0,
+        10.0
+      ],
+      [
+        3.0,
+        4.2,
+        3.0,
+        9.0
+      ],
+      [
+        4.0,
+        4.2,
+        2.4,
+        9.0
+      ],
+      [
+        5.0,
+        3.8,
+        2.9,
+        9.0
+      ],
+      [
+        6.0,
+        3.2,
+        3.2,
+        8.5
+      ],
+      [
+        7.0,
+        3.0,
+        2.0,
+        6.5
+      ],
+      [
+        8.0,
+        3.0,
+        2.0,
+        6.5
+      ],
+      [
+        9.0,
+        3.0,
+        2.0,
+        6.5
+      ]
+    ]
+  },
+  "source_map_sha256": "3cc986b7b9b0901609e744a5476b103585c6e13087dd94f962b8b63ce0260bdc"
+}

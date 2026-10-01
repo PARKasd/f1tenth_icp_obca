@@ -7,3 +7,5 @@ __pycache__/
 *.kissmap
 *.bag
 *.mcap
+offline_trajectory_generator/output/
+offline_trajectory_generator/gui_params.yaml

@@ -34,3 +34,16 @@
   Account for validation tolerance. Keep full-grid final validation and report pair counts.
 - Keep the sparse objective/Jacobian/Lagrangian Hessian consistent; verify analytical
   derivatives against finite differences whenever solver equations change.
+- Raceline mode loads the parent offline generator's CSV (x_m/y_m/psi_rad/vx_mps) in C++.
+  The simulator defaults to installed racelines/map.csv; local mode remains available.
+  Initial pose selects direction once. Track unwrapped progress in a local arc-length window;
+  never globally reacquire another hairpin branch or reverse direction after a tracking miss.
+  Reject map-frame/initial pose mismatch. The global route never marks unseen cells free.
+- /obca/raceline is a transient-local nav_msgs/Path for RViz. Source map hashes and generator
+  options belong in racelines/map.metadata.json. Document regenerating for a different map.
+- Preserve the global target when newly observed obstacles overlap it; only the optimized
+  swept path must be clear. Do not clip away the target before OBCA can try a detour.
+- The fixed current state has no preceding interpolation segment; its distance bound uses
+  margin without future swept-step reserve. Keep independent footprint validation unchanged.
+- Denser ICP voxels and disabled roll compensation in sim.yaml are low-speed planar-gym
+  settings only. Keep real-car ICP tuning and its wider correspondence search unchanged.
