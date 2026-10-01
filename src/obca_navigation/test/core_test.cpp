@@ -94,6 +94,14 @@ int main()try {
   const auto far=solve(ego,0,ref,{{10,10,11,11}},c);
   check(far.success && far.collision_pairs==0,"unreachable obstacle was not excluded");
   for(const auto&p:corridor.states)for(const auto&b:walls)check(!overlap(p,c.front,c.rear,c.half_width,b),"OBCA intersects wall");
+  Pose tracked=corridor.states[2];tracked.y+=0.06;tracked.yaw+=0.04;
+  const auto replan=solve(tracked,corridor.states[2].steering,
+    reference(g,tracked,c,corridor.states),walls,c,corridor.states);
+  check(replan.success && validatePath(g,replan.states,c,reason),
+    "warm replan after tracking displacement is invalid");
+  check(distance(replan.states.front(),tracked)<1e-8 &&
+    std::abs(angle(replan.states.front().yaw-tracked.yaw))<1e-8,
+    "warm replan is not rooted in measured vehicle state");
   // A static obstacle on the original centreline: reference search must go around it,
   // and the optimized vehicle rectangle must clear it, not just its centre point.
   auto detour_grid=grid();

@@ -152,12 +152,16 @@ class RuntimeLaunch(unittest.TestCase):
                         profile_params = yaml.safe_load((Path(__file__).parents[1] / 'config' / 'sim.yaml').read_text())
                         for owner, names in [('obca_planner', ('reference_wall_weight', 'goal_clearance_weight',
                                                              'position_weight', 'max_speed', 'solve_seconds',
-                                                             'reference_distance', 'planning_period')),
-                                             ('obca_tracker', ('lookahead', 'max_speed'))]:
+                                                             'reference_distance', 'planning_period', 'dt',
+                                                             'max_accel', 'max_steering_rate')),
+                                             ('obca_tracker', ('lookahead', 'max_speed', 'dt',
+                                                               'max_accel', 'max_steering_rate'))]:
                             for name in names:
                                 self.assertEqual(parameter(owner, name).double_value,
                                                  profile_params[owner]['ros__parameters'].get(name,
                                                      profile_params['/**']['ros__parameters'].get(name)))
+                        self.assertEqual(parameter('obca_planner', 'horizon').integer_value,
+                                         profile_params['obca_planner']['ros__parameters']['horizon'])
                     if profile == 'sim' and not local:
                         self.assertEqual(parameter('obca_planner', 'reference_mode').string_value, 'raceline')
                         self.assertTrue(Path(parameter('obca_planner', 'raceline_file').string_value).is_file())
