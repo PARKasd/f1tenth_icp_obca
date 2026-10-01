@@ -3,7 +3,8 @@
 ## 1. 목적과 구성
 
 초기 위치와 실제 차체 방향을 수동 지정하고, 최소 곡률 레이스라인과 최근 LiDAR 관측으로 경로를 생성하는
-ROS 2 Jazzy 저속 프로토타입입니다. 모든 런타임 노드는 C++17입니다.
+ROS 2 Humble / Ubuntu 22.04 저속 프로토타입입니다. 모든 런타임 노드는 C++17입니다.
+Jazzy / Ubuntu 24.04는 `main` 브랜치를 사용합니다. 배포판 전환 시 빌드 폴더를 공유하지 않습니다.
 
 | 노드 | 역할 |
 |---|---|
@@ -169,7 +170,7 @@ Ipopt 중간 콜백은 반복 사이에만 시간을 확인하므로 hard real-t
 6. 시뮬에서 명령을 연결하려면 아래 예시를 사용합니다.
 
 ```zsh
-source /opt/ros/jazzy/setup.zsh
+source /opt/ros/humble/setup.zsh
 source install/setup.zsh
 ros2 launch obca_navigation navigation_sim.launch.py
 ```

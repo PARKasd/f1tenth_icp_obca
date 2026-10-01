@@ -1,6 +1,8 @@
 # obca_navigation
 
 - C++17 runtime: planner_node (local mapping/reference/OBCA) and tracker_node (path following).
+- On the humble branch, target ROS 2 Humble / Ubuntu 22.04. Runtime launch tests use an
+  isolated ROS domain and preview drive topic, never the simulator or hardware command topic.
 - Core in include/obca_navigation and src/core.cpp, src/solver.cpp is ROS-independent and tested
   in test/core_test.cpp. Ipopt solves actual dual separating-distance constraints for rectangles.
 - Inputs: LaserScan, Odometry, PoseWithCovarianceStamped, diagnostic_msgs/DiagnosticArray.

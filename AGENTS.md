@@ -1,6 +1,8 @@
 # Repository rules
 
-- User-facing communication and node documentation are Korean. Runtime nodes are C++17, ROS 2 Jazzy.
+- User-facing communication and node documentation are Korean. Runtime nodes are C++17.
+  This user-requested `humble` branch targets Ubuntu 22.04 / ROS 2 Humble; `main` targets Jazzy.
+  Never mix distro build/install directories. Validate Humble using the Ubuntu 22.04 CI job.
 - This is an independent repository initialized from the parent source snapshot with the user's
   authorization. Before edits inspect git status; fetch/update only when a remote exists. Never
   overwrite uncommitted work. The remote is PARKasd/f1tenth_icp_obca; follow the current

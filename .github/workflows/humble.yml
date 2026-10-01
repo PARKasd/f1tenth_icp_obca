@@ -1,0 +1,49 @@
+name: Humble / Ubuntu 22.04
+on:
+  push:
+    branches: [humble]
+  pull_request:
+    branches: [humble]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-test:
+    runs-on: ubuntu-22.04
+    container: ros:humble-ros-base-jammy
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROS_DOMAIN_ID: '117'
+      ROS_LOCALHOST_ONLY: '1'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared dependencies
+        run: |
+          . /etc/os-release
+          test "$VERSION_ID" = '22.04'
+          test "$ROS_DISTRO" = 'humble'
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake pkg-config python3-colcon-common-extensions python3-rosdep
+          if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init; fi
+          rosdep update --rosdistro humble
+          rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+      - name: Build all runtime nodes and tests
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Test core, localization and actual ROS launches
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test --executor sequential --event-handlers console_direct+
+          colcon test-result --verbose
+      - name: Upload build and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: humble-build-test-logs
+          path: log/

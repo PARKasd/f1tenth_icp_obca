@@ -1,6 +1,9 @@
 # F1TENTH ICP + OBCA
 
-ROS 2 Jazzy / C++17 기반 ICP + 레이스라인 + OBCA 저속 주행 프로토타입입니다.
+**이 브랜치는 Ubuntu 22.04 / ROS 2 Humble용입니다.** Ubuntu 24.04 / Jazzy는 `main`을 사용합니다.
+설치·검증 범위는 [Humble 안내](docs/humble.md)를 참고하십시오.
+
+ROS 2 Humble / C++17 기반 ICP + 레이스라인 + OBCA 저속 주행 프로토타입입니다.
 `/initialpose`로 초기 좌표와 실제 차체 방향을 지정한 뒤, wheel odometry + Kinematic ICP로
 스캔을 정합하고, 오프라인 최소 곡률 레이스라인을 기준으로 OBCA 경로를 반복 생성합니다.
 기존 지도 없는 로컬 reference 모드도 선택할 수 있습니다.
@@ -22,20 +25,28 @@ ROS 2 Jazzy / C++17 기반 ICP + 레이스라인 + OBCA 저속 주행 프로토�
 
 ## 1. 설치·빌드
 
-Ubuntu 24.04 / ROS 2 Jazzy 환경에서 다음 순서로 실행합니다.
+Ubuntu 22.04 / ROS 2 Humble이 설치된 환경에서 다음 순서로 실행합니다.
 
 ```zsh
-cd ~/f1tenth_icp_obca
+git clone --branch humble https://github.com/PARKasd/f1tenth_icp_obca.git ~/f1tenth_icp_obca_humble
+cd ~/f1tenth_icp_obca_humble
 # 먼저 ~/.zshrc에 기존 빌드/ROS 환경 alias가 있는지 확인하고 활용합니다.
-rg 'alias|colcon|jazzy' ~/.zshrc
-source /opt/ros/jazzy/setup.zsh
-sudo apt install build-essential cmake pkg-config coinor-libipopt-dev libeigen3-dev libtbb-dev
-rosdep install --from-paths src --ignore-src -r -y --rosdistro jazzy
+rg 'alias|colcon|humble|jazzy' ~/.zshrc
+source /opt/ros/humble/setup.zsh
+sudo apt update
+sudo apt install build-essential cmake pkg-config coinor-libipopt-dev libeigen3-dev libtbb-dev python3-colcon-common-extensions python3-rosdep
+# rosdep을 처음 설정하는 PC에서만 sudo rosdep init 실행
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y --rosdistro humble
 colcon build --symlink-install --packages-up-to obca_navigation
 source install/setup.zsh
 colcon test --packages-select obca_navigation kinematic_localization
 colcon test-result --verbose
 ```
+
+Bash를 사용하면 `setup.zsh` 대신 `setup.bash`를 읽습니다. `.zshrc`에서 Jazzy를 자동으로
+source하는 alias/설정이 있으면 Humble 터미널에서는 사용하지 마십시오. 두 배포판의
+`build/`, `install/`, `log/`는 공유하지 않고 위처럼 별도 작업 폴더를 사용합니다.
 
 ## 2. 실행
 
